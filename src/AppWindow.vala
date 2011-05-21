@@ -89,7 +89,7 @@ public class FullscreenWindow : PageWindow {
         // call to set_default_size() saves one repaint caused by changing
         // size from default to full screen. In slideshow mode, this change
         // also causes pixbuf cache updates, so it really saves some work.
-        set_default_size(get_screen().get_width(), get_screen().get_height());
+        set_default_size(monitor.width, monitor.height);
         
         // need to create a Gdk.Window to set masks
         fullscreen();
@@ -578,7 +578,7 @@ public abstract class AppWindow : PageWindow {
         dialog.add_buttons(negative, Gtk.ResponseType.NO, affirmative, Gtk.ResponseType.YES);
         
         bool response = (dialog.run() == Gtk.ResponseType.YES);
-        
+
         dialog.destroy();
         
         return response;
@@ -589,11 +589,13 @@ public abstract class AppWindow : PageWindow {
         Gtk.MessageDialog dialog = new Gtk.MessageDialog.with_markup((parent != null) ? parent : get_instance(),
             Gtk.DialogFlags.MODAL, Gtk.MessageType.QUESTION, Gtk.ButtonsType.NONE, "%s", build_alert_body_text(title, message));
 
-        dialog.use_markup = true;
-
         dialog.add_buttons(negative, Gtk.ResponseType.NO, affirmative, Gtk.ResponseType.YES,
             _("_Cancel"), Gtk.ResponseType.CANCEL);
         
+        // Occasionally, with_markup doesn't actually enable markup, but set_markup always works.
+        dialog.set_markup(build_alert_body_text(title, message));
+        dialog.use_markup = true;
+
         int response = dialog.run();
         
         dialog.destroy();

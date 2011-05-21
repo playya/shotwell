@@ -588,13 +588,14 @@ public class FlickrPublisher : Spit.Publishing.Publisher, GLib.Object {
         
         // Sort publishables in reverse-chronological order.
         Spit.Publishing.Publishable[] publishables = host.get_publishables();
-        Gee.SortedSet<Spit.Publishing.Publishable> sorted_set = 
-            new Gee.TreeSet<Spit.Publishing.Publishable>((CompareFunc) flickr_date_time_compare_func);
+        Gee.ArrayList<Spit.Publishing.Publishable> sorted_list =
+            new Gee.ArrayList<Spit.Publishing.Publishable>();
         foreach (Spit.Publishing.Publishable p in publishables) {
-            sorted_set.add(p);
+            sorted_list.add(p);
         }
+        sorted_list.sort((CompareFunc) flickr_date_time_compare_func);
         
-        Uploader uploader = new Uploader(session, sorted_set.to_array(), parameters);
+        Uploader uploader = new Uploader(session, sorted_list.to_array(), parameters);
         uploader.upload_complete.connect(on_upload_complete);
         uploader.upload_error.connect(on_upload_error);
         uploader.upload(on_upload_status_updated);
@@ -793,7 +794,10 @@ private class UploadTransaction : Publishing.RESTSupport.UploadTransaction {
 
         GLib.HashTable<string, string> disposition_table =
             new GLib.HashTable<string, string>(GLib.str_hash, GLib.str_equal);
-        disposition_table.insert("filename",  Soup.URI.encode(publishable.get_publishing_name(),
+        string? filename = publishable.get_publishing_name();
+        if (filename == null || filename == "")
+            filename = publishable.get_param_string(Spit.Publishing.Publishable.PARAM_STRING_BASENAME);
+        disposition_table.insert("filename",  Soup.URI.encode(filename,
             null));
         disposition_table.insert("name", "photo");
 
@@ -863,7 +867,7 @@ internal class WebAuthenticationPane : Spit.Publishing.DialogPane, Object {
 
     private WebKit.WebView webview = null;
     private Gtk.ScrolledWindow webview_frame = null;
-    private Gtk.Layout white_pane = null;
+    private Gtk.Container white_pane = null;
     private string login_url;
     private Gtk.VBox pane_widget = null;
 
@@ -875,9 +879,9 @@ internal class WebAuthenticationPane : Spit.Publishing.DialogPane, Object {
 
         Gdk.Color white_color;
         Gdk.Color.parse("white", out white_color);
-        Gtk.Adjustment layout_pane_adjustment = new Gtk.Adjustment(0.5, 0.0, 1.0, 0.01, 0.1, 0.1);
-        white_pane = new Gtk.Layout(layout_pane_adjustment, layout_pane_adjustment);
+        white_pane = new Gtk.EventBox();
         white_pane.modify_bg(Gtk.StateType.NORMAL, white_color);
+        white_pane.modify_base(Gtk.StateType.NORMAL, white_color);        
         pane_widget.add(white_pane);
 
         webview_frame = new Gtk.ScrolledWindow(null, null);
@@ -886,12 +890,15 @@ internal class WebAuthenticationPane : Spit.Publishing.DialogPane, Object {
 
         webview = new WebKit.WebView();
         webview.get_settings().enable_plugins = false;
+        webview.get_settings().enable_default_context_menu = false;
+
         webview.load_finished.connect(on_load_finished);
         webview.load_started.connect(on_load_started);
 
         webview_frame.add(webview);
         white_pane.add(webview_frame);
-        webview.set_size_request(853, 587);
+        white_pane.set_size_request(820, 578);
+        webview.set_size_request(840, 578);
     }
     
    
@@ -904,7 +911,7 @@ internal class WebAuthenticationPane : Spit.Publishing.DialogPane, Object {
     }
     
     private void on_load_started(WebKit.WebFrame origin_frame) {
-        webview_frame.hide();
+        webview.hide();
         pane_widget.window.set_cursor(new Gdk.Cursor(Gdk.CursorType.WATCH));
     }
 
@@ -913,7 +920,7 @@ internal class WebAuthenticationPane : Spit.Publishing.DialogPane, Object {
     }
 
     public void show_page() {
-        webview_frame.show();
+        webview.show();
         pane_widget.window.set_cursor(new Gdk.Cursor(Gdk.CursorType.LEFT_PTR));
     }
 

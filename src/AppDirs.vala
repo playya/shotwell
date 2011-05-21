@@ -114,7 +114,8 @@ class AppDirs {
     public static File get_temp_dir() {
         // Because multiple instances of the app can run at the same time, place temp files in
         // subdir named after process ID
-        File tmp_dir = File.new_for_path(Environment.get_tmp_dir()).get_child("shotwell").get_child(
+        File tmp_dir = File.new_for_path(Environment.get_tmp_dir()).get_child(
+            "shotwell-%d".printf((int) Posix.getuid())).get_child(
             "%d".printf((int) Posix.getpid()));
         try {
             if (!tmp_dir.query_exists(null))
@@ -153,7 +154,7 @@ class AppDirs {
     public static File get_lib_dir() {
         File? install_dir = get_install_dir();
         
-        return (install_dir != null) ? install_dir.get_child(Resources.LIBDIR).get_child("shotwell")
+        return (install_dir != null) ? install_dir.get_child(Resources.LIB).get_child("shotwell")
             : get_exec_dir();
     }
     

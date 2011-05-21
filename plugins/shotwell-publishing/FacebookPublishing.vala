@@ -1240,13 +1240,14 @@ internal class FacebookUploadTransaction : FacebookRESTTransaction {
     private string mime_type;
     private string endpoint_url;
     private string method;
+    private MappedFile mapped_file = null;
 
     public FacebookUploadTransaction(FacebookRESTSession session, string aid, string privacy_setting,
         Spit.Publishing.Publishable publishable, File file) {
         base(session);
         this.publishable = publishable;
         this.file = file;
-
+        
         if (publishable.get_media_type() == Spit.Publishing.Publisher.MediaType.PHOTO) {
             mime_type = "image/jpeg";
             endpoint_url = PHOTO_ENDPOINT_URL;
@@ -1277,6 +1278,32 @@ internal class FacebookUploadTransaction : FacebookRESTTransaction {
 
         return result;
     }
+    
+    private void preprocess_publishable(Spit.Publishing.Publishable publishable) {
+        if (publishable.get_media_type() != Spit.Publishing.Publisher.MediaType.PHOTO)
+            return;
+        
+        GExiv2.Metadata publishable_metadata = new GExiv2.Metadata();
+        try {
+            publishable_metadata.open_path(publishable.get_serialized_file().get_path());
+        } catch (GLib.Error err) {
+            warning("couldn't read metadata from file '%s' for upload preprocessing.",
+                publishable.get_serialized_file().get_path());
+        }
+        
+        if (!publishable_metadata.has_iptc())
+            return;
+        
+        if (publishable_metadata.has_tag("Iptc.Application2.Caption"))
+            publishable_metadata.set_tag_string("Iptc.Application2.Caption", "");
+        
+        try {
+            publishable_metadata.save_file(publishable.get_serialized_file().get_path());
+        } catch (GLib.Error err) {
+            warning("couldn't write metadata to file '%s' for upload preprocessing.",
+                publishable.get_serialized_file().get_path());
+        }
+    }
 
     protected override void sign() {
         add_argument("call_id", get_parent_session().get_next_call_id());
@@ -1287,6 +1314,7 @@ internal class FacebookUploadTransaction : FacebookRESTTransaction {
     }
 
     public override void execute() throws Spit.Publishing.PublishingError {
+        preprocess_publishable(publishable);
         sign();
 
         // before they can be executed, upload requests must be signed and must
@@ -1306,15 +1334,15 @@ internal class FacebookUploadTransaction : FacebookRESTTransaction {
         // append the signature key-value pair to the formdata string
         message_parts.append_form_string(SIGNATURE_KEY, get_signature_value());
 
-        // attempt to read the binary payload from disk
-        string payload;
-        size_t payload_length;
+        // attempt to map the binary payload from disk into memory
         try {
-            FileUtils.get_contents(file.get_path(), out payload, out payload_length);
+            mapped_file = new MappedFile(file.get_path(), false);
         } catch (FileError e) {
             throw new Spit.Publishing.PublishingError.LOCAL_FILE_ERROR(
                 _("A temporary file needed for publishing is unavailable"));
         }
+        unowned uint8[] payload = (uint8[]) mapped_file.get_contents();
+        payload.length = (int) mapped_file.get_length();
 
         // get the sequence number of the part that will soon become the binary data
         // part
@@ -1323,7 +1351,7 @@ internal class FacebookUploadTransaction : FacebookRESTTransaction {
         // bind the binary data read from disk into a Soup.Buffer object so that we
         // can attach it to the multipart request, then actaully append the buffer
         // to the multipart request. Then, set the MIME type for this part.
-        Soup.Buffer bindable_data = new Soup.Buffer(Soup.MemoryUse.COPY, payload.data[0:payload_length]);
+        Soup.Buffer bindable_data = new Soup.Buffer(Soup.MemoryUse.TEMPORARY, payload);
         message_parts.append_form_file("", file.get_path(), mime_type, bindable_data);
 
         // set up the Content-Disposition header for the multipart part that contains the
@@ -1376,6 +1404,8 @@ internal class WebAuthenticationPane : Spit.Publishing.DialogPane, Object {
 
         webview = new WebKit.WebView();
         webview.get_settings().enable_plugins = false;
+        webview.get_settings().enable_default_context_menu = false;
+
         webview.load_finished.connect(on_page_load);
         webview.load_started.connect(on_load_started);
 
