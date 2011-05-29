@@ -1,7 +1,7 @@
 PROGRAM = shotwell
 PROGRAM_THUMBNAILER = shotwell-video-thumbnailer
 
-VERSION = 0.10.0+trunk
+VERSION = 0.10.0+git$(shell git rev-parse HEAD|cut -c -8)
 GETTEXT_PACKAGE = $(PROGRAM)
 BUILD_ROOT = 1
 
