@@ -161,11 +161,22 @@ public class ZoomBuffer : Object {
             view_rect_proj.height /= 2;
         }
 
+        // On very small images, it's possible for these to
+        // be 0, and GTK doesn't like sampling a region 0 px
+        // across.
+        view_rect_proj.width = view_rect_proj.width.clamp(1, int.MAX);
+        view_rect_proj.height = view_rect_proj.height.clamp(1, int.MAX);
+
+        view_rect.width = view_rect.width.clamp(1, int.MAX);
+        view_rect.height = view_rect.height.clamp(1, int.MAX);
+
         Gdk.Pixbuf proj_subpixbuf = new Gdk.Pixbuf.subpixbuf(sample_source_pixbuf, view_rect_proj.x,
             view_rect_proj.y, view_rect_proj.width, view_rect_proj.height);
 
         Gdk.Pixbuf zoomed = proj_subpixbuf.scale_simple(view_rect.width, view_rect.height,
             Gdk.InterpType.BILINEAR);
+
+        assert(zoomed != null);
 
         return zoomed;
     }
@@ -285,6 +296,9 @@ public class ZoomBuffer : Object {
         Gdk.Rectangle view_rect = zoom_state.get_viewing_rectangle_wrt_content();
         Gdk.Rectangle view_rect_proj = zoom_state.get_viewing_rectangle_projection(
             preview_image);
+
+        view_rect_proj.width = view_rect_proj.width.clamp(1, int.MAX);   
+        view_rect_proj.height = view_rect_proj.height.clamp(1, int.MAX);   
 
         Gdk.Pixbuf proj_subpixbuf = new Gdk.Pixbuf.subpixbuf(preview_image,
             view_rect_proj.x, view_rect_proj.y, view_rect_proj.width, view_rect_proj.height);
@@ -1331,9 +1345,17 @@ public abstract class EditingHostPage : SinglePhotoPage {
     }
 
     private void swap_in_original() {
-        Gdk.Pixbuf? original = master_cache.get_ready_pixbuf(get_photo());
-        if (original == null)
+        Gdk.Pixbuf? original;
+
+        try {
+            original = get_photo().get_master_pixbuf(cache.get_scaling());
+
+            if (original == null)
+                return;
+        }
+        catch (Error e) {
             return;
+        }
         
         // store what's currently displayed only for the duration of the shift pressing
         swapped = get_unscaled_pixbuf();

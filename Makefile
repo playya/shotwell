@@ -263,6 +263,7 @@ EXT_PKGS = \
 	gmodule-2.0 \
 	gstreamer-0.10 \
 	gstreamer-base-0.10 \
+	gstreamer-pbutils-0.10 \
 	gtk+-2.0 \
 	gudev-1.0 \
 	libexif \
@@ -584,6 +585,7 @@ ifdef INSTALL_HEADERS
 	mkdir -p $(DESTDIR)$(PREFIX)/share/vala/vapi
 	$(INSTALL_DATA) $(PLUGIN_VAPI) $(DESTDIR)$(PREFIX)/share/vala/vapi
 	$(INSTALL_DATA) $(PLUGIN_DEPS) $(DESTDIR)$(PREFIX)/share/vala/vapi
+	test -d $(DESTDIR)$(PREFIX)/$(LIB)/pkgconfig || mkdir -p $(DESTDIR)$(PREFIX)/$(LIB)/pkgconfig
 	$(INSTALL_DATA) $(PC_FILE) $(DESTDIR)$(PREFIX)/$(LIB)/pkgconfig
 endif
 
@@ -692,7 +694,8 @@ pkgcheck:
 ifndef ASSUME_PKGS
 ifdef EXT_PKG_VERSIONS
 	@pkg-config --print-errors --exists '$(EXT_PKG_VERSIONS) $(DIRECT_LIBS_VERSIONS)'
-else ifdef EXT_PKGS
+endif
+ifdef EXT_PKGS
 	@pkg-config --print-errors --exists $(EXT_PKGS) $(DIRECT_LIBS_VERSIONS)
 endif
 # Check for libraw manually

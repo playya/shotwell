@@ -647,8 +647,8 @@ public class CropTool : EditingTool {
 
         result += ConstraintDescription(_("Unconstrained"), 0, 0, false, ANY_ASPECT_RATIO);
         result += ConstraintDescription(_("Square"), 1, 1, false);
-        result += ConstraintDescription(_("Screen"), 0, 0, false, SCREEN_ASPECT_RATIO);
-        result += ConstraintDescription(_("Original Size"), 0, 0, false, ORIGINAL_ASPECT_RATIO);
+        result += ConstraintDescription(_("Screen"), 0, 0, true, SCREEN_ASPECT_RATIO);
+        result += ConstraintDescription(_("Original Size"), 0, 0, true, ORIGINAL_ASPECT_RATIO);
         result += ConstraintDescription(_("-"), 0, 0, false, SEPARATOR);
         result += ConstraintDescription(_("SD Video (4 : 3)"), 4, 3, true);
         result += ConstraintDescription(_("HD Video (16 : 9)"), 16, 9, true);
@@ -869,9 +869,9 @@ public class CropTool : EditingTool {
         crop_tool_window.layout.remove(crop_tool_window.response_layout);
 
         crop_tool_window.layout.add(crop_tool_window.constraint_combo);
-        crop_tool_window.layout.add(crop_tool_window.custom_height_entry);
-        crop_tool_window.layout.add(crop_tool_window.custom_mulsign_label);
         crop_tool_window.layout.add(crop_tool_window.custom_width_entry);
+        crop_tool_window.layout.add(crop_tool_window.custom_mulsign_label);
+        crop_tool_window.layout.add(crop_tool_window.custom_height_entry);
         crop_tool_window.layout.add(crop_tool_window.pivot_reticle_button);
         crop_tool_window.layout.add(crop_tool_window.response_layout);
         
@@ -1205,6 +1205,17 @@ public class CropTool : EditingTool {
     }
     
     public override void paint(Cairo.Context default_ctx) {
+        // fill region behind the crop surface with neutral color
+        int w;
+        int h;
+
+        canvas.get_drawing_window().get_size(out w, out h);
+
+        default_ctx.set_source_rgba(0.0, 0.0, 0.0, 1.0);
+        default_ctx.rectangle(0, 0, w, h);
+        default_ctx.fill();
+        default_ctx.paint();
+
         Cairo.Context ctx = new Cairo.Context(crop_surface);
         ctx.set_operator(Cairo.Operator.SOURCE);
         ctx.set_source_rgba(0.0, 0.0, 0.0, 0.5);

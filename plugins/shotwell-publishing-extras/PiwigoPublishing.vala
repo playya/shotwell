@@ -147,7 +147,14 @@ public class PiwigoPublisher : Spit.Publishing.Publisher, GLib.Object {
             do_fetch_categories();
         } else {
             debug("PiwigoPublisher: session is not authenticated.");
-            do_show_authentication_pane();
+            string? persistent_url = get_persistent_url();
+            string? persistent_username = get_persistent_username();
+            string? persistent_password = get_persistent_password();
+            if (persistent_url != null && persistent_username != null && persistent_password != null)
+                do_network_login(persistent_url, persistent_username,
+                    persistent_password, get_remember_password());
+            else
+                do_show_authentication_pane();
         }
     }
     
@@ -171,6 +178,22 @@ public class PiwigoPublisher : Spit.Publishing.Publisher, GLib.Object {
     
     private void set_persistent_username(string username) {
         host.set_config_string("username", username);
+    }
+    
+    public string? get_persistent_password() {
+        return host.get_config_string("password", null);
+    }
+    
+    private void set_persistent_password(string? password) {
+        host.set_config_string("password", password);
+    }
+    
+    public bool get_remember_password() {
+        return host.get_config_bool("remember-password", false);
+    }
+    
+    private void set_remember_password(bool remember_password) {
+        host.set_config_bool("remember-password", remember_password);
     }
     
     public int get_last_category() {
@@ -224,12 +247,14 @@ public class PiwigoPublisher : Spit.Publishing.Publisher, GLib.Object {
      * @param username the name of the Piwigo user as entered in the dialog
      * @param password the password of the Piwigo as entered in the dialog
      */
-    private void on_authentication_pane_login_clicked(string url, string username, string password) {
+    private void on_authentication_pane_login_clicked(
+        string url, string username, string password, bool remember_password
+    ) {
         debug("EVENT: on_authentication_pane_login_clicked");
         if (!running)
             return;
 
-        do_network_login(url, username, password);
+        do_network_login(url, username, password, remember_password);
     }
     
     /**
@@ -243,10 +268,16 @@ public class PiwigoPublisher : Spit.Publishing.Publisher, GLib.Object {
      * @param username the name of the Piwigo user used to login
      * @param password the password of the Piwigo user used to login
      */
-    private void do_network_login(string url, string username, string password) {
+    private void do_network_login(string url, string username, string password, bool remember_password) {
         debug("ACTION: logging in");
         host.set_service_locked(true);
         host.install_login_wait_pane();
+        
+        set_remember_password(remember_password);
+        if (remember_password)
+            set_persistent_password(password);
+        else
+            set_persistent_password(null);
 
         SessionLoginTransaction login_trans = new SessionLoginTransaction(
             session, normalise_url(url), username, password);
@@ -869,9 +900,10 @@ internal class AuthenticationPane : Spit.Publishing.DialogPane, Object {
     private Gtk.Entry url_entry;
     private Gtk.Entry username_entry;
     private Gtk.Entry password_entry;
+    private Gtk.CheckButton remember_password_checkbutton;
     private Gtk.Button login_button;
 
-    public signal void login(string url, string user, string password);
+    public signal void login(string url, string user, string password, bool remember_password);
 
     public AuthenticationPane(PiwigoPublisher publisher, Mode mode = Mode.INTRO) {
         this.pane_widget = new Gtk.VBox(false, 0);
@@ -914,6 +946,13 @@ internal class AuthenticationPane : Spit.Publishing.DialogPane, Object {
                 username_entry.set_text(persistent_username);
             }
             password_entry = builder.get_object ("password_entry") as Gtk.Entry;
+            string? persistent_password = publisher.get_persistent_password();
+            if (persistent_password != null) {
+                password_entry.set_text(persistent_password);
+            }
+            remember_password_checkbutton =
+                builder.get_object ("remember_password_checkbutton") as Gtk.CheckButton;
+            remember_password_checkbutton.set_active(publisher.get_remember_password());
 
             login_button = builder.get_object("login_button") as Gtk.Button;
 
@@ -934,7 +973,8 @@ internal class AuthenticationPane : Spit.Publishing.DialogPane, Object {
     }
 
     private void on_login_button_clicked() {
-        login(url_entry.get_text(), username_entry.get_text(), password_entry.get_text());
+        login(url_entry.get_text(), username_entry.get_text(),
+            password_entry.get_text(), remember_password_checkbutton.get_active());
     }
 
     private void on_url_changed() {
@@ -1096,11 +1136,16 @@ internal class PublishingOptionsPane : Spit.Publishing.DialogPane, Object {
     }
 
     private void update_publish_button_sensitivity() {
-        string category_name = new_category_entry.get_text();
-        publish_button.set_sensitive(!(
-            is_string_empty(category_name.strip()) &&
-            create_new_radio.get_active()
-        ));
+        string category_name = new_category_entry.get_text().strip();
+        publish_button.set_sensitive(
+            !(
+                create_new_radio.get_active() &&
+                (
+                    is_string_empty(category_name) ||
+                    category_already_exists(category_name)
+                )
+            )
+        );
     }
     
     public Gtk.Widget get_widget() {
@@ -1137,7 +1182,8 @@ internal class PublishingOptionsPane : Spit.Publishing.DialogPane, Object {
             }
             new_category_entry.set_sensitive(false);
         }
-        new_category_entry.set_text(DEFAULT_CATEGORY_NAME);
+        if (!category_already_exists(DEFAULT_CATEGORY_NAME))
+            new_category_entry.set_text(DEFAULT_CATEGORY_NAME);
         Gtk.ListStore perms_model = new Gtk.ListStore.newv({typeof(string)});
         Gtk.CellRenderer perms_renderer = new Gtk.CellRendererText();
         perms_combo.set_model(perms_model);
@@ -1176,6 +1222,17 @@ internal class PublishingOptionsPane : Spit.Publishing.DialogPane, Object {
         for(int i = 0; i < perm_levels.length; i++) {
             if (perm_levels[i].id == permission_level_id) {
                 result = i;
+                break;
+            }
+        }
+        return result;
+    }
+    
+    private bool category_already_exists(string category_name) {
+        bool result = false;
+        foreach(Category category in existing_categories) {
+            if (category.name == category_name) {
+                result = true;
                 break;
             }
         }
@@ -1372,9 +1429,14 @@ private class ImagesAddTransaction : Publishing.RESTSupport.UploadTransaction {
         debug("PiwigoConnector: Uploading photo %s to category id %d with perm level %d",
             publishable.get_serialized_file().get_basename(),
             parameters.category.id, parameters.perm_level.id);
+        string name = publishable.get_publishing_name();
+        if (is_string_empty(name)) {
+            name = publishable.get_param_string(
+                Spit.Publishing.Publishable.PARAM_STRING_BASENAME);
+        }
         add_argument("method", "pwg.images.addSimple");
         add_argument("category", parameters.category.id.to_string());
-        add_argument("name", publishable.get_serialized_file().get_basename());
+        add_argument("name", name);
         add_argument("level", parameters.perm_level.id.to_string());
         if (!is_string_empty(tags))
             add_argument("tags", tags);
@@ -1389,8 +1451,7 @@ private class ImagesAddTransaction : Publishing.RESTSupport.UploadTransaction {
 
         GLib.HashTable<string, string> disposition_table =
             new GLib.HashTable<string, string>(GLib.str_hash, GLib.str_equal);
-        disposition_table.insert("filename",  Soup.URI.encode(
-            publishable.get_serialized_file().get_basename(), null));
+        disposition_table.insert("filename",  Soup.URI.encode(name, null));
         disposition_table.insert("name", "image");
 
         set_binary_disposition_table(disposition_table);
