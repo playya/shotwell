@@ -281,7 +281,7 @@ public abstract class CollectionPage : MediaPage {
         set_action_sensitive("ExternalEdit", 
             one_selected && !is_string_empty(Config.Facade.get_instance().get_external_photo_app()));
         set_action_visible("ExternalEditRAW",
-            has_selected && (!primary_is_video)
+            has_selected && (!primary_is_video) && selection_has_raw_photo()
             && ((Photo) get_view().get_selected_at(0).get_source()).get_master_file_format() == 
                 PhotoFileFormat.RAW
             && !is_string_empty(Config.Facade.get_instance().get_external_raw_app()));
