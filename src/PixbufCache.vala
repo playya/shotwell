@@ -53,6 +53,17 @@ public class PixbufCache : Object {
             } catch (Error err) {
                 this.err = err;
             }
+            
+            try {
+                this.err = null;
+                if (pixbuf == null && photo.get_master_file_format() == PhotoFileFormat.RAW) {
+                    // Redevelop photo and try again.
+                    photo.redevelop_raw(photo.get_raw_developer());
+                    pixbuf = photo.get_pixbuf(scaling);
+                }
+            } catch (Error err) {
+                this.err = err;
+            }
         }
     }
     
@@ -279,6 +290,13 @@ public class PixbufCache : Object {
                 continue;
             
             Photo photo = (Photo) object;
+            
+            if (in_progress.has_key(photo)) {
+                // Load is in progress, must cancel.
+                in_progress.get(photo).cancel();
+                in_progress.unset(photo);
+                continue;
+            }
             
             // only interested if in this cache
             if (!cache.has_key(photo))

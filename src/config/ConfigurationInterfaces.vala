@@ -60,6 +60,7 @@ public enum ConfigurableProperty {
     PRINTING_PRINT_TITLES,
     PRINTING_SIZE_SELECTION,
     PRINTING_TITLES_FONT,
+    RAW_DEVELOPER_DEFAULT,
     SHOW_WELCOME_DIALOG,
     SIDEBAR_POSITION,
     SLIDESHOW_DELAY,
@@ -194,6 +195,9 @@ public enum ConfigurableProperty {
             case PRINTING_TITLES_FONT:
                 return "PRINTING_TITLES_FONT";
                 
+            case RAW_DEVELOPER_DEFAULT:
+                return "RAW_DEVELOPER_DEFAULT";
+                
             case SHOW_WELCOME_DIALOG:
                 return "SHOW_WELCOME_DIALOG";
                 
@@ -232,8 +236,8 @@ public interface ConfigurationEngine : GLib.Object {
     public abstract int get_int_property(ConfigurableProperty p) throws ConfigurationError;
     public abstract void set_int_property(ConfigurableProperty p, int val) throws ConfigurationError;
     
-    public abstract string? get_string_property(ConfigurableProperty p) throws ConfigurationError;
-    public abstract void set_string_property(ConfigurableProperty p, string? val) throws ConfigurationError;
+    public abstract string get_string_property(ConfigurableProperty p) throws ConfigurationError;
+    public abstract void set_string_property(ConfigurableProperty p, string val) throws ConfigurationError;
     
     public abstract bool get_bool_property(ConfigurableProperty p) throws ConfigurationError;
     public abstract void set_bool_property(ConfigurableProperty p, bool val) throws ConfigurationError;
@@ -417,7 +421,8 @@ public abstract class ConfigurationFacade : Object {
     //
     public virtual string? get_directory_pattern() {
         try {
-            return get_engine().get_string_property(ConfigurableProperty.DIRECTORY_PATTERN);
+            string s = get_engine().get_string_property(ConfigurableProperty.DIRECTORY_PATTERN);
+            return (s == "") ? null : s;
         } catch (ConfigurationError err) {
             on_configuration_error(err);
 
@@ -427,6 +432,9 @@ public abstract class ConfigurationFacade : Object {
     
     public virtual void set_directory_pattern(string? s) {
         try {
+            if (s == null)
+                s = "";
+
             get_engine().set_string_property(ConfigurableProperty.DIRECTORY_PATTERN, s);
         } catch (ConfigurationError err) {
             on_configuration_error(err);
@@ -676,6 +684,30 @@ public abstract class ConfigurationFacade : Object {
         try {
             get_engine().set_string_property(ConfigurableProperty.EXTERNAL_RAW_APP,
                 external_raw_app);
+        } catch (ConfigurationError err) {
+            on_configuration_error(err);
+            return;
+        }
+    }
+
+    //
+    // Default RAW developer.
+    //
+    public virtual RawDeveloper get_default_raw_developer() {
+        try {
+            return RawDeveloper.from_string(get_engine().get_string_property(
+                ConfigurableProperty.RAW_DEVELOPER_DEFAULT));
+        } catch (ConfigurationError err) {
+            on_configuration_error(err);
+            
+            return RawDeveloper.SHOTWELL;
+        }
+    }
+    
+    public virtual void set_default_raw_developer(RawDeveloper d) {
+        try {
+            get_engine().set_string_property(ConfigurableProperty.RAW_DEVELOPER_DEFAULT,
+                d.to_string());
         } catch (ConfigurationError err) {
             on_configuration_error(err);
             return;

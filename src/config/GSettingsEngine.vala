@@ -71,6 +71,7 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
         schema_names[ConfigurableProperty.PRINTING_PRINT_TITLES] = PRINTING_SCHEMA_NAME;
         schema_names[ConfigurableProperty.PRINTING_SIZE_SELECTION] = PRINTING_SCHEMA_NAME;
         schema_names[ConfigurableProperty.PRINTING_TITLES_FONT] = PRINTING_SCHEMA_NAME;
+        schema_names[ConfigurableProperty.RAW_DEVELOPER_DEFAULT] = UI_PREFS_SCHEMA_NAME;;
         schema_names[ConfigurableProperty.SHOW_WELCOME_DIALOG] = UI_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.SIDEBAR_POSITION] = UI_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.SLIDESHOW_DELAY] = SLIDESHOW_PREFS_SCHEMA_NAME;
@@ -122,6 +123,7 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
         key_names[ConfigurableProperty.PRINTING_PRINT_TITLES] = "print-titles";
         key_names[ConfigurableProperty.PRINTING_SIZE_SELECTION] = "size-selection";
         key_names[ConfigurableProperty.PRINTING_TITLES_FONT] = "titles-font";
+        key_names[ConfigurableProperty.RAW_DEVELOPER_DEFAULT] = "raw-developer-default";
         key_names[ConfigurableProperty.SHOW_WELCOME_DIALOG] = "show-welcome-dialog";
         key_names[ConfigurableProperty.SIDEBAR_POSITION] = "sidebar-position";
         key_names[ConfigurableProperty.SLIDESHOW_DELAY] = "delay";
@@ -259,7 +261,7 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
         property_changed(p);
     }
     
-    public string? get_string_property(ConfigurableProperty p) throws ConfigurationError {
+    public string get_string_property(ConfigurableProperty p) throws ConfigurationError {
         string gs_result = get_gs_string(schema_names[p], key_names[p]);
         
         // if we're getting the desktop background file, convert the file uri we get back from
@@ -272,7 +274,7 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
         return result;
     }
     
-    public void set_string_property(ConfigurableProperty p, string? val) throws ConfigurationError {
+    public void set_string_property(ConfigurableProperty p, string val) throws ConfigurationError {
         // if we're setting the desktop background file, convert the filename into a file URI
         string converted_val = val;
         if (p == ConfigurableProperty.DESKTOP_BACKGROUND_FILE) {

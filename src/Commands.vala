@@ -1084,6 +1084,56 @@ public class SetRatingCommand : MultipleDataSourceCommand {
     }
 }
 
+public class SetRawDeveloperCommand : MultipleDataSourceCommand {
+    private Gee.HashMap<Photo, RawDeveloper> last_developer_map;
+    private RawDeveloper new_developer;
+
+    public SetRawDeveloperCommand(Gee.Iterable<DataView> iter, RawDeveloper developer) {
+        base (iter, _("Setting RAW developer"), _("Restoring previous RAW developer"),
+            developer.get_label(), "");
+        new_developer = developer;
+        save_source_states(iter);
+    }
+    
+    private void save_source_states(Gee.Iterable<DataView> iter) {
+        last_developer_map = new Gee.HashMap<Photo, RawDeveloper>();
+        
+        foreach (DataView view in iter) {
+            Photo? photo = view.get_source() as Photo;
+            if (is_raw_photo(photo))
+                last_developer_map[photo] = photo.get_raw_developer();
+        }
+    }
+    
+    public override void execute() {
+        base.execute();
+    }
+    
+    public override void undo() {
+        base.undo();
+    }
+    
+    public override void execute_on_source(DataSource source) {
+        Photo? photo = source as Photo;
+        if (is_raw_photo(photo)) {
+            if (new_developer == RawDeveloper.CAMERA && !photo.is_raw_developer_available(RawDeveloper.CAMERA))
+                photo.set_raw_developer(RawDeveloper.EMBEDDED);
+            else
+                photo.set_raw_developer(new_developer);
+        }
+    }
+    
+    public override void undo_on_source(DataSource source) {
+        Photo? photo = source as Photo;
+        if (is_raw_photo(photo))
+            photo.set_raw_developer(last_developer_map[photo]);
+    }
+    
+    private bool is_raw_photo(Photo? photo) {
+        return photo != null && photo.get_master_file_format() == PhotoFileFormat.RAW;
+    }
+}
+
 public class AdjustDateTimePhotoCommand : SingleDataSourceCommand {
     private Dateable dateable;
     private int64 time_shift;
@@ -1285,8 +1335,7 @@ public class RenameTagCommand : SimpleProxyableCommand {
     private string new_name;
     
     public RenameTagCommand(Tag tag, string new_name) {
-        base (tag, Resources.rename_tag_label(tag.get_name(), new_name), 
-            Resources.rename_tag_tooltip(tag.get_name()));
+        base (tag, Resources.rename_tag_label(tag.get_name(), new_name), tag.get_name());
         
         old_name = tag.get_name();
         this.new_name = new_name;
@@ -1305,8 +1354,7 @@ public class RenameTagCommand : SimpleProxyableCommand {
 
 public class DeleteTagCommand : SimpleProxyableCommand {
     public DeleteTagCommand(Tag tag) {
-        base (tag, Resources.delete_tag_label(tag.get_name()),
-            Resources.delete_tag_tooltip(tag.get_name(), tag.get_sources_count()));
+        base (tag, Resources.delete_tag_label(tag.get_name()), tag.get_name());
     }
     
     protected override void execute_on_source(DataSource source) {
@@ -1391,8 +1439,7 @@ public class TagUntagPhotosCommand : SimpleProxyableCommand {
         base (tag,
             attach ? Resources.tag_photos_label(tag.get_name(), count) 
                 : Resources.untag_photos_label(tag.get_name(), count),
-            attach ? Resources.tag_photos_tooltip(tag.get_name(), count) 
-                : Resources.untag_photos_tooltip(tag.get_name(), count));
+            tag.get_name());
         
         this.sources = sources;
         this.attach = attach;
@@ -1432,8 +1479,7 @@ public class RenameSavedSearchCommand : SingleDataSourceCommand {
     private string new_name;
     
     public RenameSavedSearchCommand(SavedSearch search, string new_name) {
-        base (search, Resources.rename_search_label(search.get_name(), new_name), 
-            Resources.rename_search_tooltip(search.get_name()));
+        base (search, Resources.rename_search_label(search.get_name(), new_name), search.get_name());
             
         this.search = search;
         old_name = search.get_name();
@@ -1455,8 +1501,7 @@ public class DeleteSavedSearchCommand : SingleDataSourceCommand {
     private SavedSearch search;
     
     public DeleteSavedSearchCommand(SavedSearch search) {
-        base (search, Resources.delete_search_label(search.get_name()), 
-            Resources.delete_search_tooltip(search.get_name()));
+        base (search, Resources.delete_search_label(search.get_name()), search.get_name());
             
         this.search = search;
     }

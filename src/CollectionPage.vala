@@ -646,7 +646,7 @@ public abstract class CollectionPage : MediaPage {
             for (int i = 0; i < selected_count; i++) {
                 Photo photo = (Photo) get_view().get_selected_at(i).get_source();
                 if (photo.get_master_file_format() == PhotoFileFormat.RAW)
-                    photo.open_master_with_external_editor();
+                    photo.open_with_raw_external_editor();
             }
 
             AppWindow.get_instance().set_normal_cursor();

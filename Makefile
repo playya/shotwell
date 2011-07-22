@@ -80,7 +80,6 @@ UNUNITIZED_SRC_FILES = \
 	Printing.vala \
 	Tag.vala \
 	Screensaver.vala \
-	MimicManager.vala \
 	Exporter.vala \
 	DirectoryMonitor.vala \
 	LibraryMonitor.vala \
@@ -100,6 +99,7 @@ UNUNITIZED_SRC_FILES = \
 	VideoMonitor.vala \
 	SearchFilter.vala \
 	MediaViewTracker.vala \
+	Upgrades.vala
 
 THUMBNAILER_SRC_FILES = \
 	shotwell-video-thumbnailer.vala

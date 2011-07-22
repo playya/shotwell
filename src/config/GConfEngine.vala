@@ -138,6 +138,9 @@ public class GConfConfigurationEngine : ConfigurationEngine, GLib.Object {
         property_paths[ConfigurableProperty.PRINTING_TITLES_FONT] =
             "/apps/shotwell/printing/print_titles_font";
 
+        property_paths[ConfigurableProperty.RAW_DEVELOPER_DEFAULT] =
+            PATH_SHOTWELL_PREFS + "/files/raw_developer_default";
+
         property_paths[ConfigurableProperty.SHOW_WELCOME_DIALOG] =
             PATH_SHOTWELL_PREFS + "/ui/show_welcome_dialog";
 
@@ -244,7 +247,7 @@ public class GConfConfigurationEngine : ConfigurationEngine, GLib.Object {
         }
     }
     
-    private string? get_gconf_string(string path) throws ConfigurationError {
+    private string get_gconf_string(string path) throws ConfigurationError {
         GConf.Value? val = null;
         try {
             val = client.get(path);
@@ -255,14 +258,10 @@ public class GConfConfigurationEngine : ConfigurationEngine, GLib.Object {
             throw new ConfigurationError.PROPERTY_HAS_NO_VALUE(("GConfConfigurationManager: " +
                 "path = '%s'.").printf(path));
         
-        string stored = val.get_string();
-        if (is_string_empty(stored))
-            return null;
-
-        return stored;
+        return val.get_string();
     }
 
-    private void set_gconf_string(string path, string? value) throws ConfigurationError {
+    private void set_gconf_string(string path, string value) throws ConfigurationError {
         try {
             client.set_string(path, value);
         } catch (Error err) {
@@ -284,11 +283,11 @@ public class GConfConfigurationEngine : ConfigurationEngine, GLib.Object {
         property_changed(p);
     }
     
-    public string? get_string_property(ConfigurableProperty p) throws ConfigurationError {
+    public string get_string_property(ConfigurableProperty p) throws ConfigurationError {
         return get_gconf_string(property_paths[p]);
     }
     
-    public void set_string_property(ConfigurableProperty p, string? val) throws ConfigurationError {
+    public void set_string_property(ConfigurableProperty p, string val) throws ConfigurationError {
         set_gconf_string(property_paths[p], val);
 
         property_changed(p);
