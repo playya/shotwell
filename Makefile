@@ -1,17 +1,14 @@
 PROGRAM = shotwell
 PROGRAM_THUMBNAILER = shotwell-video-thumbnailer
 
-<<<<<<< HEAD
-VERSION = 0.10.0+git$(shell git rev-parse HEAD|cut -c -8)
-=======
-VERSION = 0.10.90+trunk
->>>>>>> 3af94b9b7537b867703b822ea4511ed6a4d1d3c4
+VERSION = 0.11.0+trunk
 GETTEXT_PACKAGE = $(PROGRAM)
 BUILD_ROOT = 1
 
 VALAC := valac
 VALAC_VERSION := `$(VALAC) --version | awk '{print $$2}'`
 MIN_VALAC_VERSION := 0.11.7
+MAX_VALAC_VERSION := 0.13.0
 INSTALL_PROGRAM := install
 INSTALL_DATA := install -m 644
 
@@ -37,6 +34,9 @@ LOCAL_LANG_DIR=locale-langpack
 SYSTEM_LANG_DIR := $(DESTDIR)$(PREFIX)/share/locale
 
 VALAFLAGS := -g --enable-checking --thread --fatal-warnings $(USER_VALAFLAGS)
+ifdef UNITY_SUPPORT
+VALAFLAGS := $(VALAFLAGS) --define UNITY_SUPPORT
+endif
 
 DEFINES := _PREFIX='"$(PREFIX)"' _VERSION='"$(VERSION)"' GETTEXT_PACKAGE='"$(GETTEXT_PACKAGE)"' \
 	_LANG_SUPPORT_DIR='"$(SYSTEM_LANG_DIR)"' _LIB='"${LIB}"'
@@ -282,6 +282,9 @@ EXT_PKGS = \
 	unique-1.0 \
 	webkit-1.0 \
 	gconf-2.0
+ifdef UNITY_SUPPORT
+EXT_PKGS += unity
+endif
 
 THUMBNAILER_PKGS = \
     gtk+-2.0 \
