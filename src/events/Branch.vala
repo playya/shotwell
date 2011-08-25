@@ -378,6 +378,10 @@ public abstract class Events.DirectoryEntry : Sidebar.SimplePageEntry, Sidebar.E
     public virtual Icon? get_sidebar_closed_icon() {
         return Events.Branch.closed_icon;
     }
+    
+    public bool expand_on_select() {
+        return true;
+    }
 }
 
 public class Events.MasterDirectoryEntry : Events.DirectoryEntry {
@@ -507,6 +511,10 @@ public class Events.EventEntry : Sidebar.SimplePageEntry, Sidebar.RenameableEntr
         AppWindow.get_command_manager().execute(new SetEventCommand(views, event));
         
         return true;
+    }
+    
+    public bool internal_drop_received_arbitrary(Gtk.SelectionData data) {
+        return false;
     }
 }
 

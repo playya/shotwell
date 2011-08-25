@@ -125,10 +125,10 @@
         <description>A grayscale color for use as the background color.</description>
     </key>
     
-    <key name="raw-developer-default" type="s">
-        <default>'SHOTWELL'</default>
-        <summary>RAW developer default</summary>
-        <description>Default option for which RAW developer Shotwell will use.</description>
+    <key name="hide-photos-already-imported" type="b">
+        <default>false</default>
+        <summary>Selection state of "hide photos" option</summary>
+        <description>Last used selection state of the "hide photos already imported" option in the import page.</description>
     </key>
 </schema>
 
@@ -232,6 +232,12 @@
         <summary>directory pattern custom</summary>
         <description>A string encoding a custom naming pattern that will be used to name photo directories on import.</description>
     </key>
+    
+    <key name="raw-developer-default" type="s">
+        <default>'SHOTWELL'</default>
+        <summary>RAW developer default</summary>
+        <description>Default option for which RAW developer Shotwell will use.</description>
+    </key>
 </schema>
 
 <schema id="org.yorba.shotwell.preferences.editing" path="/apps/shotwell/preferences/editing/">
@@ -258,6 +264,7 @@
     <child name="facebook" schema="org.yorba.shotwell.sharing.facebook" />
     <child name="flickr" schema="org.yorba.shotwell.sharing.flickr" />
     <child name="picasa" schema="org.yorba.shotwell.sharing.picasa" />
+    <child name="youtube" schema="org.yorba.shotwell.sharing.youtube" />
 </schema>
 
 <schema id="org.yorba.shotwell.sharing.facebook" path="/apps/shotwell/sharing/facebook/">
@@ -283,6 +290,12 @@
         <default>""</default>
         <summary>user name</summary>
         <description>The name of the currently logged in Facebook user, if any</description>
+    </key>
+    
+    <key name="default-size" type="i">
+        <default>0</default>
+        <summary>default size code</summary>
+        <description>A numeric code representing the default size for photos published to Facebook</description>
     </key>
 </schema>
 
@@ -329,6 +342,26 @@
         <default>2</default>
         <summary>default size</summary>
         <description>A numeric code representing the default size for photos uploaded to Picasa Web Albums</description>
+    </key>
+    
+    <key name="last-album" type="s">
+        <default>""</default>
+        <summary>last album</summary>
+        <description>The name of the last album the user published photos to, if any</description>
+    </key>
+</schema>
+
+<schema id="org.yorba.shotwell.sharing.youtube" path="/apps/shotwell/sharing/youtube/">
+    <key name="user-name" type="s">
+        <default>""</default>
+        <summary>username</summary>
+        <description>YouTube username for the currently logged in session, if any</description>
+    </key>
+    
+    <key name="auth-token" type="s">
+        <default>""</default>
+        <summary>authentication token</summary>
+        <description>YouTube authentication token for the currently logged in session, if any</description>
     </key>
 </schema>
 

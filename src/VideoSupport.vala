@@ -41,13 +41,13 @@ public class VideoReader {
     
     private double clip_duration = UNKNOWN_CLIP_DURATION;
     private Gdk.Pixbuf preview_frame = null;
-    private string filepath = null;
-    private Gst.Element colorspace = null;
+    private File file = null;
     private GLib.Pid thumbnailer_pid = 0;
+    public DateTime? timestamp { get; private set; default = null; }
 
-    public VideoReader(string filepath) {
-        this.filepath = filepath;
-    }
+    public VideoReader(File file) {
+        this.file = file;
+     }
     
     public static bool is_supported_video_file(File file) {
         return is_supported_video_filename(file.get_basename());
@@ -92,7 +92,7 @@ public class VideoReader {
         time_t exposure_time = params.exposure_time_override;
         string title = "";
         
-        VideoReader reader = new VideoReader(file.get_path());
+        VideoReader reader = new VideoReader(file);
         bool is_interpretable = true;
         double clip_duration = 0.0;
         Gdk.Pixbuf preview_frame = reader.read_preview_frame();
@@ -121,6 +121,12 @@ public class VideoReader {
                 title = video_title;
         } catch (Error err) {
             warning("Unable to read video metadata: %s", err.message);
+        }
+        
+        if (exposure_time == 0) {
+            // Use time reported by Gstreamer, if available.
+            exposure_time = (time_t) (reader.timestamp != null ? 
+                reader.timestamp.to_unix() : 0);
         }
         
         params.row.video_id = VideoID();
@@ -155,39 +161,27 @@ public class VideoReader {
     private void read_internal() throws VideoError {
         if (!does_file_exist())
             throw new VideoError.FILE("video file '%s' does not exist or is inaccessible".printf(
-                filepath));
+                file.get_path()));
         
-        // Setup GStreamer pipeline.
-        Gst.Pipeline thumbnail_pipeline = new Gst.Pipeline("thumbnail-pipeline");
-        Gst.Element thumbnail_source = Gst.ElementFactory.make("filesrc", "source");
-        thumbnail_source.set_property("location", filepath);
-        Gst.Element thumbnail_decode_bin = Gst.ElementFactory.make("decodebin2", "decode-bin");
-        Gst.Element fake_sink = Gst.ElementFactory.make("fakesink", "fakesink");
-        colorspace = Gst.ElementFactory.make("ffmpegcolorspace", "colorspace");
-        thumbnail_pipeline.add_many(thumbnail_source, thumbnail_decode_bin, colorspace,
-            fake_sink);
-
-        thumbnail_source.link(thumbnail_decode_bin);
-        colorspace.link(fake_sink);
-        thumbnail_decode_bin.pad_added.connect(on_pad_added);
-
-        // the get_state( ) call is required after the call to set_state( ) to block this
-        // thread until the pipeline thread has entered a consistent state
-        thumbnail_pipeline.set_state(Gst.State.PLAYING);
-        Gst.State from_state;
-        Gst.State to_state;
-        thumbnail_pipeline.get_state(out from_state, out to_state, 1000000000);
-
-        Gst.Format time_query_format = Gst.Format.TIME;
-        int64 video_length = -1;
-        thumbnail_pipeline.query_duration(ref time_query_format, out video_length);
-        if (video_length != -1)
-            clip_duration = ((double) video_length) / 1000000000.0;
-        else
-            throw new VideoError.CONTENTS("GStreamer couldn't extract clip duration");
-        
-        // We're done with the video, so set the pipeline state to NULL
-        thumbnail_pipeline.set_state(Gst.State.NULL);
+        try {
+            Gst.Discoverer d = new Gst.Discoverer((Gst.ClockTime) (Gst.SECOND * 5));
+            Gst.DiscovererInfo info = d.discover_uri(file.get_uri());
+            
+            clip_duration = ((double) info.get_duration()) / 1000000000.0;
+            
+            // Get creation time.
+            // TODO: Note that TAG_DATE can be changed to TAG_DATE_TIME in the future
+            // (and the corresponding output struct) in order to implement #2836.
+            Date? video_date = null;
+            if (info.get_tags() != null && info.get_tags().get_date(Gst.TAG_DATE, out video_date)) {
+                timestamp = new DateTime.local(video_date.get_year(), video_date.get_month(), 
+                    video_date.get_day(), 0, 0, 0);
+            }
+        } catch (Error e) {
+            debug("Video read error: %s", e.message);
+            throw new VideoError.CONTENTS("GStreamer couldn't extract clip information: %s"
+                .printf(e.message));
+        }
     }
     
     // Used by thumbnailer() to kill the external process if need be.
@@ -255,16 +249,8 @@ public class VideoReader {
         return buf;
     }
     
-    private void on_pad_added(Gst.Pad pad) {
-        Gst.Caps c = pad.get_caps();
-
-        if (c.to_string().has_prefix("video")) {
-            pad.link(colorspace.get_static_pad("sink"));
-        }
-    }
-    
     private bool does_file_exist() {
-        return FileUtils.test(filepath, FileTest.EXISTS | FileTest.IS_REGULAR);
+        return FileUtils.test(file.get_path(), FileTest.EXISTS | FileTest.IS_REGULAR);
     }
     
     public Gdk.Pixbuf? read_preview_frame() {
@@ -275,7 +261,7 @@ public class VideoReader {
             return null;
         
         // Get preview frame from thumbnailer.
-        preview_frame = thumbnailer(filepath);
+        preview_frame = thumbnailer(file.get_path());
         if (null == preview_frame)
             preview_frame = Resources.get_noninterpretable_badge_pixbuf();
         
@@ -291,7 +277,7 @@ public class VideoReader {
     
     public VideoMetadata read_metadata() throws Error {
         VideoMetadata metadata = new VideoMetadata();
-        metadata.read_from_file(File.new_for_path(filepath));
+        metadata.read_from_file(File.new_for_path(file.get_path()));
         
         return metadata;
     }
@@ -304,11 +290,11 @@ public class Video : VideoSource, Flaggable, Monitorable, Dateable {
     public const uint64 FLAG_OFFLINE =  0x0000000000000002;
     public const uint64 FLAG_FLAGGED =  0x0000000000000004;
     
-    private static bool interpreter_state_changed = false;
-    private static int current_state = -1;
-    private static bool normal_regen_complete = false;
-    private static bool offline_regen_complete = false;
-    public static VideoSourceCollection global = null;
+    private static bool interpreter_state_changed;
+    private static int current_state;
+    private static bool normal_regen_complete;
+    private static bool offline_regen_complete;
+    public static VideoSourceCollection global;
 
     private VideoRow backing_row;
     
@@ -323,11 +309,29 @@ public class Video : VideoSource, Flaggable, Monitorable, Dateable {
     }
 
     public static void init(ProgressMonitor? monitor = null) {
+        // Must initialize static variables here.
+        // TODO: set values at declaration time once the following Vala bug is fixed:
+        //       https://bugzilla.gnome.org/show_bug.cgi?id=655594
+        interpreter_state_changed = false;
+        current_state = -1;
+        normal_regen_complete = false;
+        offline_regen_complete = false;
+    
         // initialize GStreamer, but don't pass it our actual command line arguments -- we don't
         // want our end users to be able to parameterize the GStreamer configuration
         string[] fake_args = new string[0];
         unowned string[] fake_unowned_args = fake_args;
         Gst.init(ref fake_unowned_args);
+        
+        int saved_state = Config.Facade.get_instance().get_video_interpreter_state_cookie();
+        current_state = (int) Gst.Registry.get_default().get_feature_list_cookie();
+        if (saved_state == Config.Facade.NO_VIDEO_INTERPRETER_STATE) {
+            message("interpreter state cookie not found; assuming all video thumbnails are out of date");
+            interpreter_state_changed = true;
+        } else if (saved_state != current_state) {
+            message("interpreter state has changed; video thumbnails may be out of date");
+            interpreter_state_changed = true;
+        }
         
         global = new VideoSourceCollection();
         
@@ -338,6 +342,9 @@ public class Video : VideoSource, Flaggable, Monitorable, Dateable {
         int count = all.size;
         for (int ctr = 0; ctr < count; ctr++) {
             Video video = new Video(all.get(ctr));
+            
+            if (interpreter_state_changed)
+                video.set_is_interpretable(false);
             
             if (video.is_trashed())
                 trashed_videos.add(video);
@@ -353,16 +360,6 @@ public class Video : VideoSource, Flaggable, Monitorable, Dateable {
         global.add_many_to_trash(trashed_videos);
         global.add_many_to_offline(offline_videos);
         global.add_many(all_videos);
-
-        int saved_state = Config.Facade.get_instance().get_video_interpreter_state_cookie();
-        current_state = (int) Gst.Registry.get_default().get_feature_list_cookie();
-        if (saved_state == Config.Facade.NO_VIDEO_INTERPRETER_STATE) {
-            message("interpreter state cookie not found; assuming all video thumbnails are out of date");
-            interpreter_state_changed = true;
-        } else if (saved_state != current_state) {
-            message("interpreter state has changed; video thumbnails may be out of date");
-            interpreter_state_changed = true;
-        }
     }
     
     public static bool has_interpreter_state_changed() {
@@ -533,7 +530,7 @@ public class Video : VideoSource, Flaggable, Monitorable, Dateable {
     }
 
     public override Gdk.Pixbuf? create_thumbnail(int scale) throws Error {
-        VideoReader reader = new VideoReader(backing_row.filepath);
+        VideoReader reader = new VideoReader(get_file());
         Gdk.Pixbuf? frame = reader.read_preview_frame();
         
         return (frame != null) ? frame : Resources.get_noninterpretable_badge_pixbuf().copy();
@@ -635,9 +632,8 @@ public class Video : VideoSource, Flaggable, Monitorable, Dateable {
     
     public override void mark_online() {
         remove_flags(FLAG_OFFLINE);
-        if ((!get_is_interpretable()) && has_interpreter_state_changed()) {
+        if ((!get_is_interpretable()) && has_interpreter_state_changed())
             check_is_interpretable();
-        }
     }
 
     public override void trash() {
@@ -775,9 +771,24 @@ public class Video : VideoSource, Flaggable, Monitorable, Dateable {
             return backing_row.is_interpretable;
         }
     }
+    
+    private void set_is_interpretable(bool is_interpretable) {
+        lock (backing_row) {
+            if (backing_row.is_interpretable == is_interpretable)
+                return;
+            
+            backing_row.is_interpretable = is_interpretable;
+        }
+        
+        try {
+            VideoTable.get_instance().update_is_interpretable(get_video_id(), is_interpretable);
+        } catch (DatabaseError e) {
+            AppWindow.database_error(e);
+        }
+    }
 
     public void check_is_interpretable() {
-        VideoReader backing_file_reader = new VideoReader(get_filename());
+        VideoReader backing_file_reader = new VideoReader(get_file());
 
         double clip_duration = -1.0;
         Gdk.Pixbuf? preview_frame = null;
@@ -934,7 +945,7 @@ public class Video : VideoSource, Flaggable, Monitorable, Dateable {
     }
     
     public VideoMetadata read_metadata() throws Error {
-        return (new VideoReader(get_filename())).read_metadata();
+        return (new VideoReader(get_file())).read_metadata();
     }
 }
 

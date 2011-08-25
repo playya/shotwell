@@ -51,6 +51,7 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
         schema_names[ConfigurableProperty.EVENTS_SORT_ASCENDING] = UI_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.EXTERNAL_PHOTO_APP] = EDITING_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.EXTERNAL_RAW_APP] = EDITING_PREFS_SCHEMA_NAME;
+        schema_names[ConfigurableProperty.HIDE_PHOTOS_ALREADY_IMPORTED] = UI_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.IMPORT_DIR] = FILES_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.KEEP_RELATIVITY] = UI_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.LAST_USED_SERVICE] = SHARING_SCHEMA_NAME;
@@ -71,7 +72,7 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
         schema_names[ConfigurableProperty.PRINTING_PRINT_TITLES] = PRINTING_SCHEMA_NAME;
         schema_names[ConfigurableProperty.PRINTING_SIZE_SELECTION] = PRINTING_SCHEMA_NAME;
         schema_names[ConfigurableProperty.PRINTING_TITLES_FONT] = PRINTING_SCHEMA_NAME;
-        schema_names[ConfigurableProperty.RAW_DEVELOPER_DEFAULT] = UI_PREFS_SCHEMA_NAME;;
+        schema_names[ConfigurableProperty.RAW_DEVELOPER_DEFAULT] = FILES_PREFS_SCHEMA_NAME;;
         schema_names[ConfigurableProperty.SHOW_WELCOME_DIALOG] = UI_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.SIDEBAR_POSITION] = UI_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.SLIDESHOW_DELAY] = SLIDESHOW_PREFS_SCHEMA_NAME;
@@ -103,6 +104,7 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
         key_names[ConfigurableProperty.EVENTS_SORT_ASCENDING] = "events-sort-ascending";
         key_names[ConfigurableProperty.EXTERNAL_PHOTO_APP] = "external-photo-editor";
         key_names[ConfigurableProperty.EXTERNAL_RAW_APP] = "external-raw-editor";
+        key_names[ConfigurableProperty.HIDE_PHOTOS_ALREADY_IMPORTED] = "hide-photos-already-imported";
         key_names[ConfigurableProperty.IMPORT_DIR] = "import-dir";
         key_names[ConfigurableProperty.KEEP_RELATIVITY] = "keep-relativity";
         key_names[ConfigurableProperty.LAST_USED_SERVICE] = "last-used-service";
@@ -240,6 +242,7 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
         string? cleaned_id = clean_plugin_id(id);
         if (cleaned_id == null)
             cleaned_id = "default";
+        cleaned_id = cleaned_id.replace(".", "-");
         
         return "org.yorba.shotwell.%s.%s".printf(domain, cleaned_id);
     }

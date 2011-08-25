@@ -306,6 +306,11 @@ public abstract class Photo : PhotoSource, Dateable {
     public virtual signal void editable_replaced(File? old_file, File? new_file) {
     }
     
+    // Fired when one or more of the photo's RAW developments has been changed.  This will only
+    // be fired on RAW photos, and only when a development has been added or removed.
+    public virtual signal void raw_development_modified() {
+    }
+    
     // This is fired when the photo's baseline file (the file that generates images at the head
     // of the pipeline) is replaced.  Photo will make every sane effort to only fire this signal
     // if the new baseline is the same image-wise (i.e. the pixbufs it generates are essentially
@@ -415,6 +420,10 @@ public abstract class Photo : PhotoSource, Dateable {
         editable_replaced(old_file, new_file);
     }
     
+    protected virtual void notify_raw_development_modified() {
+        raw_development_modified();
+    }
+    
     protected virtual void notify_baseline_replaced() {
         baseline_replaced();
     }
@@ -521,6 +530,7 @@ public abstract class Photo : PhotoSource, Dateable {
     public void add_backing_photo_for_development(RawDeveloper d, BackingPhotoRow bpr) throws Error {
         import_developed_backing_photo(ref row, d, bpr);
         developments.set(d, bpr);
+        notify_raw_development_modified();
     }
     
     public static void import_developed_backing_photo(ref PhotoRow row, RawDeveloper d, 
@@ -570,6 +580,8 @@ public abstract class Photo : PhotoSource, Dateable {
                     
                     // Read in backing photo info, add to DB.
                     add_backing_photo_for_development(d, bps);
+                    
+                    notify_raw_development_modified();
                 } catch (Error err) {
                     debug("Error developing photo: %s", err.message);
                 }
@@ -606,6 +618,8 @@ public abstract class Photo : PhotoSource, Dateable {
                     
                     // Read in backing photo info, add to DB.
                     add_backing_photo_for_development(d, bps);
+                    
+                    notify_raw_development_modified();
                 } catch (Error e) {
                     debug("Error accessing embedded preview. Message: %s", e.message);
                     return;
@@ -663,15 +677,13 @@ public abstract class Photo : PhotoSource, Dateable {
         BackingPhotoRow bpr = developments.get(d);
         
         lock (row) {
-            if (d != RawDeveloper.CAMERA) {
-                debug("Deleting raw development: %s", d.to_string());
-                if (bpr.filepath != null) {
-                    File f = File.new_for_path(bpr.filepath);
-                    try {
-                        f.delete();
-                    } catch (Error e) {
-                        warning("Unable to delete RAW development: %s error: %s", bpr.filepath, e.message);
-                    }
+            debug("Deleting raw development: %s", d.to_string());
+            if (bpr.filepath != null) {
+                File f = File.new_for_path(bpr.filepath);
+                try {
+                    f.delete();
+                } catch (Error e) {
+                    warning("Unable to delete RAW development: %s error: %s", bpr.filepath, e.message);
                 }
             }
             
@@ -685,6 +697,8 @@ public abstract class Photo : PhotoSource, Dateable {
             ret = developments.unset(d);
             debug("returning: %d", (int) ret);
         }
+        
+        notify_raw_development_modified();
         
         return ret;
     }
@@ -829,6 +843,12 @@ public abstract class Photo : PhotoSource, Dateable {
                 return editable;
             else
                 return null;
+        }
+    }
+    
+    public Gee.Collection<BackingPhotoRow>? get_raw_development_photo_rows() {
+        lock (row) {
+            return developments != null ? developments.values : null;
         }
     }
     
@@ -1125,6 +1145,35 @@ public abstract class Photo : PhotoSource, Dateable {
         }
     }
     
+    public abstract class ReimportRawDevelopmentState {
+    }
+    
+    private class ReimportRawDevelopmentStateImpl : ReimportRawDevelopmentState {
+        class DevToReimport {
+            public BackingPhotoRow backing = new BackingPhotoRow();
+            public PhotoMetadata? metadata;
+            
+            public DevToReimport(BackingPhotoRow backing, PhotoMetadata? metadata) {
+                this.backing = backing;
+                this.metadata = metadata;
+            }
+        }
+        
+        public Gee.Collection<DevToReimport> list = new Gee.ArrayList<DevToReimport>();
+        public bool metadata_only = false;
+        
+        public ReimportRawDevelopmentStateImpl() {
+        }
+        
+        public void add(BackingPhotoRow backing, PhotoMetadata? metadata) {
+            list.add(new DevToReimport(backing, metadata));
+        }
+        
+        public int get_size() {
+            return list.size;
+        }
+    }
+    
     // This method is thread-safe.  If returns false the photo should be marked offline (in the
     // main UI thread).
     public bool prepare_for_reimport_master(out ReimportMasterState reimport_state) throws Error {
@@ -1207,7 +1256,11 @@ public abstract class Photo : PhotoSource, Dateable {
         PhotoTable.get_instance().reimport(ref reimport_state.row);
         
         lock (row) {
+            // Copy row while preserving reference to master.
+            BackingPhotoRow original_master = row.master;
             row = reimport_state.row;
+            row.master = original_master;
+            row.master.copy_from(reimport_state.row.master);
             if (!reimport_state.metadata_only)
                 internal_remove_all_transformations(false);
         }
@@ -1233,14 +1286,10 @@ public abstract class Photo : PhotoSource, Dateable {
             notify_source_reimported(reimport_state.metadata);
     }
     
-    // This method is thread-safe.  Returns false if the photo has no associated editable.
-    public bool prepare_for_reimport_editable(out ReimportEditableState state) throws Error {
-        File? file = get_editable_file();
-        if (file == null)
-            return false;
-        
-        DetectedPhotoInformation detected;
-        BackingPhotoRow backing = query_backing_photo_row(file, PhotoFileSniffer.Options.NO_MD5, 
+    // Verifies a file for reimport.  Returns the file's detected photo info.
+    private bool verify_file_for_reimport(File file, out BackingPhotoRow backing, 
+        out DetectedPhotoInformation detected) throws Error {
+        backing = query_backing_photo_row(file, PhotoFileSniffer.Options.NO_MD5, 
             out detected);
         if (backing == null) {
             return false;
@@ -1254,6 +1303,20 @@ public abstract class Photo : PhotoSource, Dateable {
             
             return false;
         }
+        
+        return true;
+    }
+    
+    // This method is thread-safe.  Returns false if the photo has no associated editable.
+    public bool prepare_for_reimport_editable(out ReimportEditableState state) throws Error {
+        File? file = get_editable_file();
+        if (file == null)
+            return false;
+        
+        DetectedPhotoInformation detected;
+        BackingPhotoRow backing;
+        if (!verify_file_for_reimport(file, out backing, out detected))
+            return false;
         
         state = new ReimportEditableStateImpl(backing, detected.metadata);
         
@@ -1299,6 +1362,61 @@ public abstract class Photo : PhotoSource, Dateable {
         
         if (is_editable_source())
             notify_source_reimported(reimport_state.metadata);
+    }
+    
+    // This method is thread-safe.  Returns false if the photo has no associated RAW developments.
+    public bool prepare_for_reimport_raw_development(out ReimportRawDevelopmentState state) throws Error {
+        Gee.Collection<File>? files = get_raw_developer_files();
+        if (files == null)
+            return false;
+        
+        ReimportRawDevelopmentStateImpl reimport_state = new ReimportRawDevelopmentStateImpl();
+        
+        foreach (File file in files) {
+            DetectedPhotoInformation detected;
+            BackingPhotoRow backing;
+            if (!verify_file_for_reimport(file, out backing, out detected))
+                continue;
+            
+            reimport_state.add(backing, detected.metadata);
+        }
+        
+        state = reimport_state;
+        return reimport_state.get_size() > 0;
+    }
+    
+    // This method is not thread-safe.  It should be called by the main thread.
+    public void finish_reimport_raw_development(ReimportRawDevelopmentState state) throws DatabaseError {
+        if (this.get_master_file_format() != PhotoFileFormat.RAW)
+            return;
+        
+        ReimportRawDevelopmentStateImpl reimport_state = (ReimportRawDevelopmentStateImpl) state;
+        
+        foreach (ReimportRawDevelopmentStateImpl.DevToReimport dev in reimport_state.list) {
+            if (!reimport_state.metadata_only) {
+                BackingPhotoTable.get_instance().update(dev.backing);
+                
+                lock (row) {
+                    // Refresh raw developments.
+                    foreach (RawDeveloper d in RawDeveloper.as_array()) {
+                        BackingPhotoID id = row.development_ids[d];
+                        if (id.id != BackingPhotoID.INVALID) {
+                            BackingPhotoRow? bpr = get_backing_row(id);
+                            if (bpr != null)
+                                developments.set(d, bpr);
+                        }
+                    }
+                }
+            }
+        }
+        
+        string list = "metadata:name,image:orientation,metadata:rating,metadata:exposure-time";
+        if (!reimport_state.metadata_only)
+            list += "image:editable,image:baseline";
+        
+        notify_altered(new Alteration.from_list(list));
+        
+        notify_raw_development_modified();
     }
     
     public override string get_typename() {
@@ -1579,6 +1697,19 @@ public abstract class Photo : PhotoSource, Dateable {
         PhotoFileReader? reader = get_editable_reader();
         
         return reader != null ? reader.get_file() : null;
+    }
+    
+    public Gee.Collection<File>? get_raw_developer_files() {
+        if (get_master_file_format() != PhotoFileFormat.RAW)
+            return null;
+        
+        Gee.ArrayList<File> ret = new Gee.ArrayList<File>();
+        lock (row) {
+            foreach (BackingPhotoRow row in developments.values)
+                ret.add(File.new_for_path(row.filepath));
+        }
+        
+        return ret;
     }
     
     public File get_source_file() {
@@ -2418,7 +2549,7 @@ public abstract class Photo : PhotoSource, Dateable {
     }
 
     // Returns the crop in the raw photo's coordinate system
-    private bool get_raw_crop(out Box crop) {
+    public bool get_raw_crop(out Box crop) {
         KeyValueMap map = get_transformation("crop");
         if (map == null)
             return false;
@@ -2911,7 +3042,7 @@ public abstract class Photo : PhotoSource, Dateable {
         }
     }
     
-    private bool export_fullsized_backing(File file) throws Error {
+    private bool export_fullsized_backing(File file, bool export_metadata = true) throws Error {
         // See if the native reader supports writing ... if no matches, need to fall back
         // on a "regular" export, which requires decoding then encoding
         PhotoFileReader export_reader = null;
@@ -2946,8 +3077,8 @@ public abstract class Photo : PhotoSource, Dateable {
             FileCopyFlags.OVERWRITE | FileCopyFlags.TARGET_DEFAULT_PERMS, null, null);
 
         // If asking for an full-sized file and there are no alterations (transformations or EXIF)
-        // *and* this is a copy of the original backing *and* there's no user metadata or title, then done
-        if (!has_alterations() && is_master && !has_user_generated_metadata() && (get_title() == null))
+        // *and* this is a copy of the original backing *and* there's no user metadata or title *and* metadata should be exported, then done
+        if (!has_alterations() && is_master && !has_user_generated_metadata() && (get_title() == null) && export_metadata)
             return true;
         
         // copy over relevant metadata if possible, otherwise generate new metadata
@@ -2962,15 +3093,21 @@ public abstract class Photo : PhotoSource, Dateable {
         else
             metadata.set_exposure_date_time(null);
         
-        metadata.set_title(get_title());
-        metadata.set_pixel_dimensions(get_dimensions()); // created by sniffing pixbuf not metadata
-        metadata.set_orientation(get_orientation());
-        metadata.set_software(Resources.APP_TITLE, Resources.APP_VERSION);
+        if(export_metadata) {
+            //set metadata
+            metadata.set_title(get_title());
+            metadata.set_pixel_dimensions(get_dimensions()); // created by sniffing pixbuf not metadata
+            metadata.set_orientation(get_orientation());
+            metadata.set_software(Resources.APP_TITLE, Resources.APP_VERSION);
         
-        if (get_orientation() != get_original_orientation())
-            metadata.remove_exif_thumbnail();
+            if (get_orientation() != get_original_orientation())
+                metadata.remove_exif_thumbnail();
 
-        set_user_metadata_for_export(metadata);
+            set_user_metadata_for_export(metadata);
+        }
+        else
+            //delete metadata
+            metadata.clear();
 
         writer.write_metadata(metadata);
         
@@ -2989,7 +3126,7 @@ public abstract class Photo : PhotoSource, Dateable {
     //
     // This method is thread-safe.
     public void export(File dest_file, Scaling scaling, Jpeg.Quality quality,
-        PhotoFileFormat export_format, bool direct_copy_unmodified = false) throws Error {
+        PhotoFileFormat export_format, bool direct_copy_unmodified = false, bool export_metadata = true) throws Error {
         if (direct_copy_unmodified) {
             get_master_file().copy(dest_file, FileCopyFlags.OVERWRITE |
                 FileCopyFlags.TARGET_DEFAULT_PERMS, null, null);
@@ -3002,7 +3139,7 @@ public abstract class Photo : PhotoSource, Dateable {
         // the original file and update relevant EXIF.
         if (scaling.is_unscaled() && (!has_alterations() || only_metadata_changed()) &&
             (export_format == get_file_format()) && (get_file_format() == PhotoFileFormat.JFIF)) {
-            if (export_fullsized_backing(dest_file))
+            if (export_fullsized_backing(dest_file, export_metadata))
                 return;
         }
 
@@ -3026,21 +3163,28 @@ public abstract class Photo : PhotoSource, Dateable {
         if (metadata == null)
             metadata = export_format.create_metadata();
         
-        metadata.set_title(get_title());
-        metadata.set_pixel_dimensions(Dimensions.for_pixbuf(pixbuf));
-        metadata.set_orientation(Orientation.TOP_LEFT);
-        metadata.set_software(Resources.APP_TITLE, Resources.APP_VERSION);
+        if (export_metadata) {
+            //set metadata
+            metadata.set_title(get_title());
+            metadata.set_pixel_dimensions(Dimensions.for_pixbuf(pixbuf));
+            metadata.set_orientation(Orientation.TOP_LEFT);
+            metadata.set_software(Resources.APP_TITLE, Resources.APP_VERSION);
+        
+            if (get_exposure_time() != 0)
+                metadata.set_exposure_date_time(new MetadataDateTime(get_exposure_time()));
+            else
+                metadata.set_exposure_date_time(null);
 
-        if (get_exposure_time() != 0)
-            metadata.set_exposure_date_time(new MetadataDateTime(get_exposure_time()));
+            metadata.remove_tag("Exif.Iop.RelatedImageWidth");
+            metadata.remove_tag("Exif.Iop.RelatedImageHeight");
+            metadata.remove_exif_thumbnail();
+
+            if (has_user_generated_metadata())
+                set_user_metadata_for_export(metadata);
+        }
         else
-            metadata.set_exposure_date_time(null);
-        metadata.remove_tag("Exif.Iop.RelatedImageWidth");
-        metadata.remove_tag("Exif.Iop.RelatedImageHeight");
-        metadata.remove_exif_thumbnail();
-
-        if(has_user_generated_metadata())
-            set_user_metadata_for_export(metadata);
+            //delete metadata
+            metadata.clear();
         
         export_format.create_metadata_writer(dest_file.get_path()).write_metadata(metadata);
     }
@@ -3733,7 +3877,8 @@ public class LibraryPhotoSourceCollection : MediaSourceCollection {
         ONLINE,
         OFFLINE,
         TRASH,
-        EDITABLE
+        EDITABLE,
+        DEVELOPER
     }
     
     public override TransactionController transaction_controller {
@@ -3747,6 +3892,8 @@ public class LibraryPhotoSourceCollection : MediaSourceCollection {
     
     private TransactionController? _transaction_controller = null;
     private Gee.HashMap<File, LibraryPhoto> by_editable_file = new Gee.HashMap<File, LibraryPhoto>(
+        file_hash, file_equal);
+    private Gee.HashMap<File, LibraryPhoto> by_raw_development_file = new Gee.HashMap<File, LibraryPhoto>(
         file_hash, file_equal);
     private Gee.MultiMap<int64?, LibraryPhoto> filesize_to_photo =
         new Gee.TreeMultiMap<int64?, LibraryPhoto>(int64_compare);
@@ -3809,6 +3956,12 @@ public class LibraryPhotoSourceCollection : MediaSourceCollection {
                     by_editable_file.set(editable, photo);
                 photo.editable_replaced.connect(on_editable_replaced);
                 
+                Gee.Collection<File> raw_list = photo.get_raw_developer_files();
+                if (raw_list != null)
+                    foreach (File f in raw_list)
+                        by_raw_development_file.set(f, photo);
+                photo.raw_development_modified.connect(on_raw_development_modified);
+                
                 int64 master_filesize = photo.get_master_photo_row().filesize;
                 int64 editable_filesize = photo.get_editable_photo_row() != null
                     ? photo.get_editable_photo_row().filesize
@@ -3818,6 +3971,15 @@ public class LibraryPhotoSourceCollection : MediaSourceCollection {
                 if (editable_filesize >= 0) {
                     filesize_to_photo.set(editable_filesize, photo);
                     photo_to_editable_filesize.set(photo, editable_filesize);
+                }
+                
+                Gee.Collection<BackingPhotoRow>? raw_rows = photo.get_raw_development_photo_rows();
+                if (raw_rows != null) {
+                    foreach (BackingPhotoRow row in raw_rows) {
+                        if (row.filesize >= 0) {
+                            filesize_to_photo.set(row.filesize, photo);
+                        }
+                     }
                 }
             }
         }
@@ -3833,6 +3995,12 @@ public class LibraryPhotoSourceCollection : MediaSourceCollection {
                 }
                 photo.editable_replaced.disconnect(on_editable_replaced);
                 
+                Gee.Collection<File> raw_list = photo.get_raw_developer_files();
+                if (raw_list != null)
+                    foreach (File f in raw_list)
+                        by_raw_development_file.unset(f);
+                photo.raw_development_modified.disconnect(on_raw_development_modified);
+                
                 int64 master_filesize = photo.get_master_photo_row().filesize;
                 int64 editable_filesize = photo.get_editable_photo_row() != null
                     ? photo.get_editable_photo_row().filesize
@@ -3842,6 +4010,15 @@ public class LibraryPhotoSourceCollection : MediaSourceCollection {
                 if (editable_filesize >= 0) {
                     filesize_to_photo.remove(editable_filesize, photo);
                     photo_to_editable_filesize.unset(photo);
+                }
+                
+                Gee.Collection<BackingPhotoRow>? raw_rows = photo.get_raw_development_photo_rows();
+                if (raw_rows != null) {
+                    foreach (BackingPhotoRow row in raw_rows) {
+                        if (row.filesize >= 0) {
+                            filesize_to_photo.remove(row.filesize, photo);
+                        }
+                     }
                 }
             }
         }
@@ -3857,6 +4034,13 @@ public class LibraryPhotoSourceCollection : MediaSourceCollection {
         
         if (new_file != null)
             by_editable_file.set(new_file, (LibraryPhoto) photo);
+    }
+    
+    private void on_raw_development_modified(Photo photo) {
+        Gee.Collection<File> raw_list = photo.get_raw_developer_files();
+        if (raw_list != null)
+            foreach (File f in raw_list)
+                by_raw_development_file.set(f, (LibraryPhoto) photo);
     }
     
     protected override void items_altered(Gee.Map<DataObject, Alteration> items) {
@@ -3899,15 +4083,42 @@ public class LibraryPhotoSourceCollection : MediaSourceCollection {
         Gee.HashMultiMap<Tag, LibraryPhoto> map = new Gee.HashMultiMap<Tag, LibraryPhoto>();
         foreach (MediaSource media in media_sources) {
             LibraryPhoto photo = (LibraryPhoto) media;
+            PhotoMetadata metadata = photo.get_metadata();
+            
+            // if any hierarchical tag information is available, process it first. hierarchical tag
+            // information must be processed first to avoid tag duplication, since most photo
+            // management applications that support hierarchical tags also "flatten" the
+            // hierarchical tag information as plain old tags. If a tag name appears as part of
+            // a hierarchical path, it needs to be excluded from being processed as a flat tag
+            HierarchicalTagIndex? htag_index = null;
+            if (metadata.has_hierarchical_keywords()) {
+                htag_index = HierarchicalTagUtilities.process_hierarchical_import_keywords(
+                    metadata.get_hierarchical_keywords());
+            }
+            
             if (photo.get_import_keywords() != null) {
                 foreach (string keyword in photo.get_import_keywords()) {
+                    if (htag_index != null && htag_index.is_tag_in_index(keyword))
+                        continue;
+
                     string? name = Tag.prep_tag_name(keyword);
                     if (name != null)
-                        map.set(Tag.for_name(name), photo);
+                        map.set(Tag.for_path(name), photo);
                 }
-                
-                photo.clear_import_keywords();
             }
+            
+            if (metadata.has_hierarchical_keywords()) {
+                foreach (string path in htag_index.get_all_paths()) {
+                    string? name = Tag.prep_tag_name(path);
+                    if (name != null)
+                        map.set(Tag.for_path(name), photo);
+                }
+            }
+        }
+        
+        foreach (MediaSource media in media_sources) {
+            LibraryPhoto photo = (LibraryPhoto) media;
+            photo.clear_import_keywords();
         }
         
         foreach (Tag tag in map.get_keys())
@@ -3979,25 +4190,41 @@ public class LibraryPhotoSourceCollection : MediaSourceCollection {
         return by_editable_file.get(file);
     }
     
+    public LibraryPhoto? fetch_by_raw_development_file(File file) {
+        return by_raw_development_file.get(file);
+    }
+    
     private void compare_backing(LibraryPhoto photo, FileInfo info,
-        Gee.Collection<LibraryPhoto> matches_master, Gee.Collection<LibraryPhoto> matches_editable) {
+        Gee.Collection<LibraryPhoto> matches_master, Gee.Collection<LibraryPhoto> matches_editable,
+        Gee.Collection<LibraryPhoto> matches_development) {
         if (photo.get_master_photo_row().matches_file_info(info))
             matches_master.add(photo);
         
         BackingPhotoRow? editable = photo.get_editable_photo_row();
         if (editable != null && editable.matches_file_info(info))
             matches_editable.add(photo);
+        
+        Gee.Collection<BackingPhotoRow>? development = photo.get_raw_development_photo_rows();
+        if (development != null) {
+            foreach (BackingPhotoRow row in development) {
+                if (row.matches_file_info(info)) {
+                    matches_development.add(photo);
+                    
+                    break;
+                }
+            }
+        }
     }
     
     // Adds photos to both collections if their filesize and timestamp match.  Note that it's possible
     // for a single photo to be added to both collections.
     public void fetch_by_matching_backing(FileInfo info, Gee.Collection<LibraryPhoto> matches_master,
-        Gee.Collection<LibraryPhoto> matches_editable) {
+        Gee.Collection<LibraryPhoto> matches_editable, Gee.Collection<LibraryPhoto> matched_development) {
         foreach (LibraryPhoto photo in filesize_to_photo.get(info.get_size()))
-            compare_backing(photo, info, matches_master, matches_editable);
+            compare_backing(photo, info, matches_master, matches_editable, matched_development);
         
         foreach (MediaSource media in get_offline_bin_contents())
-            compare_backing((LibraryPhoto) media, info, matches_master, matches_editable);
+            compare_backing((LibraryPhoto) media, info, matches_master, matches_editable, matched_development);
     }
     
     public bool has_basename_filesize_duplicate(string basename, int64 filesize) {
@@ -4040,6 +4267,13 @@ public class LibraryPhotoSourceCollection : MediaSourceCollection {
         photo = fetch_by_editable_file(file);
         if (photo != null) {
             state = State.EDITABLE;
+            
+            return photo;
+        }
+        
+        photo = fetch_by_raw_development_file(file);
+        if (photo != null) {
+            state = State.DEVELOPER;
             
             return photo;
         }
@@ -4100,11 +4334,11 @@ public class LibraryPhoto : Photo, Flaggable, Monitorable {
     private bool block_thumbnail_generation = false;
     private OneShotScheduler thumbnail_scheduler = null;
     private Gee.Collection<string>? import_keywords;
-    
-    private LibraryPhoto(PhotoRow row, Gee.Collection<string>? import_keywords) {
+
+    private LibraryPhoto(PhotoRow row) {
         base (row);
         
-        this.import_keywords = import_keywords;
+        this.import_keywords = null;
         
         thumbnail_scheduler = new OneShotScheduler("LibraryPhoto", generate_thumbnails);
         
@@ -4114,6 +4348,20 @@ public class LibraryPhoto : Photo, Flaggable, Monitorable {
         
         if ((row.flags & (FLAG_HIDDEN | FLAG_FAVORITE)) != 0)
             upgrade_rating_flags(row.flags);
+    }
+
+    private LibraryPhoto.from_import_params(PhotoImportParams import_params) {
+        base (import_params.row);
+        
+        this.import_keywords = import_params.keywords;       
+        thumbnail_scheduler = new OneShotScheduler("LibraryPhoto", generate_thumbnails);
+        
+        // if marked in a state where they're held in an orphanage, rehydrate their backlinks
+        if ((import_params.row.flags & (FLAG_TRASH | FLAG_OFFLINE)) != 0)
+            rehydrate_backlinks(global, import_params.row.backlinks);
+        
+        if ((import_params.row.flags & (FLAG_HIDDEN | FLAG_FAVORITE)) != 0)
+            upgrade_rating_flags(import_params.row.flags);
     }
     
     public static void init(ProgressMonitor? monitor = null) {
@@ -4128,7 +4376,7 @@ public class LibraryPhoto : Photo, Flaggable, Monitorable {
         int count = all.size;
         for (int ctr = 0; ctr < count; ctr++) {
             PhotoRow row = all.get(ctr);
-            LibraryPhoto photo = new LibraryPhoto(row, null);
+            LibraryPhoto photo = new LibraryPhoto(row);
             uint64 flags = row.flags;
             
             if ((flags & FLAG_TRASH) != 0)
@@ -4161,7 +4409,7 @@ public class LibraryPhoto : Photo, Flaggable, Monitorable {
             return ImportResult.DATABASE_ERROR;
         
         // create local object but don't add to global until thumbnails generated
-        photo = new LibraryPhoto(params.row, params.keywords);
+        photo = new LibraryPhoto.from_import_params(params);
         
         return ImportResult.SUCCESS;
     }
@@ -4284,7 +4532,7 @@ public class LibraryPhoto : Photo, Flaggable, Monitorable {
         PhotoRow dupe_row = PhotoTable.get_instance().get_row(dupe_id);
         
         // build the DataSource for the duplicate
-        LibraryPhoto dupe = new LibraryPhoto(dupe_row, null);
+        LibraryPhoto dupe = new LibraryPhoto(dupe_row);
 
         // clone thumbnails
         ThumbnailCache.duplicate(this, dupe);
@@ -4300,6 +4548,22 @@ public class LibraryPhoto : Photo, Flaggable, Monitorable {
                 tag.attach(dupe);
             }
         }
+        
+#if ENABLE_FACES
+        // Attach faces.
+        Gee.Collection<Face>? faces = Face.global.fetch_for_source(this);
+        if (faces != null) {
+            foreach (Face face in faces) {
+                FaceLocation? location = FaceLocation.get_face_location(face.get_face_id(), 
+                    this.get_photo_id());
+                if (location != null) {
+                    face.attach(dupe);
+                    FaceLocation.create(face.get_face_id(), dupe.get_photo_id(), 
+                        location.get_serialized_geometry());
+                }
+             }
+        }
+#endif
         
         return dupe;
     }
@@ -4442,10 +4706,40 @@ public class LibraryPhoto : Photo, Flaggable, Monitorable {
     }
     
     protected override void apply_user_metadata_for_reimport(PhotoMetadata metadata) {
+        HierarchicalTagIndex? new_htag_index = null;
+        
+        if (metadata.has_hierarchical_keywords()) {
+            new_htag_index = HierarchicalTagUtilities.process_hierarchical_import_keywords(
+                metadata.get_hierarchical_keywords());
+        }
+        
         Gee.Collection<string>? keywords = metadata.get_keywords();
         if (keywords != null) {
-            foreach (string keyword in keywords)
-                Tag.for_name(keyword).attach(this);
+            foreach (string keyword in keywords) {           
+                if (new_htag_index != null && new_htag_index.is_tag_in_index(keyword))
+                    continue;
+
+                string safe_keyword = HierarchicalTagUtilities.make_flat_tag_safe(keyword);
+                string promoted_keyword = HierarchicalTagUtilities.flat_to_hierarchical(
+                    safe_keyword);
+                
+                if (Tag.global.exists(safe_keyword)) {
+                    Tag.for_path(safe_keyword).attach(this);
+                    continue;
+                }
+                
+                if (Tag.global.exists(promoted_keyword)) {
+                    Tag.for_path(promoted_keyword).attach(this);
+                    continue;
+                }
+                
+                Tag.for_path(keyword).attach(this);
+            }
+        }
+        
+        if (new_htag_index != null) {
+            foreach (string path in new_htag_index.get_all_paths())
+                Tag.for_path(path).attach(this);
         }
     }
 }

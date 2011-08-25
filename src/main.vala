@@ -114,8 +114,6 @@ void library_exec(string[] mounts) {
         
         return;
     }
-
-    Video.init();
     
     Upgrades.init();
     
@@ -131,6 +129,10 @@ void library_exec(string[] mounts) {
             + EventTable.get_instance().get_row_count()
             + TagTable.get_instance().get_row_count()
             + VideoTable.get_instance().get_row_count()
+#if ENABLE_FACES               
+            + FaceTable.get_instance().get_row_count()
+            + FaceLocationTable.get_instance().get_row_count()
+#endif
             + Upgrades.get_instance().get_step_count();
         if (grand_total > 5000) {
             progress_dialog = new ProgressDialog(null, _("Loading Shotwell"));
@@ -167,6 +169,14 @@ void library_exec(string[] mounts) {
     if (aggregate_monitor != null)
         aggregate_monitor.next_step("Tag.init");
     Tag.init(monitor);
+#if ENABLE_FACES       
+    if (aggregate_monitor != null)
+        aggregate_monitor.next_step("FaceLocation.init");
+    FaceLocation.init(monitor);
+    if (aggregate_monitor != null)
+        aggregate_monitor.next_step("Face.init");
+    Face.init(monitor);
+#endif
     
     MetadataWriter.init();
     DesktopIntegration.init();
@@ -225,6 +235,10 @@ void library_exec(string[] mounts) {
     Tombstone.terminate();
     ThumbnailCache.terminate();
     Video.terminate();
+#if ENABLE_FACES       
+    Face.terminate();
+    FaceLocation.terminate();
+#endif
 
     Library.app_terminate();
 }
@@ -354,7 +368,11 @@ void main(string[] args) {
         GLib.Environment.set_variable("GSETTINGS_SCHEMA_DIR", AppDirs.get_exec_dir().get_path() +
             "/misc", true);
     }
-
+    
+    // Run the gsettings-data-convert tool to migrate GConf settings to gsettings ... note that this
+    // is designed to run every execution.  See http://developer.gnome.org/gio/2.28/ch28s07.html
+    GConfConfigurationEngine.run_gsettings_data_converter();
+    
     // init GTK (valac has already called g_threads_init())
     try {
         Gtk.init_with_args(ref args, _("[FILE]"), CommandlineOptions.get_options(),

@@ -1269,27 +1269,33 @@ public class AddTagsCommand : PageCommand {
     private Gee.HashMap<SourceProxy, Gee.ArrayList<MediaSource>> map =
         new Gee.HashMap<SourceProxy, Gee.ArrayList<MediaSource>>();
     
-    public AddTagsCommand(string[] names, Gee.Collection<MediaSource> sources) {
-        base (Resources.add_tags_label(names), "");
+    public AddTagsCommand(string[] paths, Gee.Collection<MediaSource> sources) {
+        base (Resources.add_tags_label(paths), "");
         
         // load/create the tags here rather than in execute() so that we can merely use the proxy
         // to access it ... this is important with the redo() case, where the tags may have been
         // created by another proxy elsewhere
-        foreach (string name in names) {
-            Tag tag = Tag.for_name(name);
-            SourceProxy tag_proxy = tag.get_proxy();
+        foreach (string path in paths) {
+            Gee.List<string> paths_to_create =
+                HierarchicalTagUtilities.enumerate_parent_paths(path);
+            paths_to_create.add(path);
             
-            // for each Tag, only attach sources which are not already attached, otherwise undo()
-            // will not be symmetric
-            Gee.ArrayList<MediaSource> add_sources = new Gee.ArrayList<MediaSource>();
-            foreach (MediaSource source in sources) {
-                if (!tag.contains(source))
-                    add_sources.add(source);
-            }
-            
-            if (add_sources.size > 0) {
-                tag_proxy.broken.connect(on_proxy_broken);
-                map.set(tag_proxy, add_sources);
+            foreach (string create_path in paths_to_create) {
+                Tag tag = Tag.for_path(create_path);
+                SourceProxy tag_proxy = tag.get_proxy();
+                
+                // for each Tag, only attach sources which are not already attached, otherwise undo()
+                // will not be symmetric
+                Gee.ArrayList<MediaSource> add_sources = new Gee.ArrayList<MediaSource>();
+                foreach (MediaSource source in sources) {
+                    if (!tag.contains(source))
+                        add_sources.add(source);
+                }
+                
+                if (add_sources.size > 0) {
+                    tag_proxy.broken.connect(on_proxy_broken);
+                    map.set(tag_proxy, add_sources);
+                }
             }
         }
         
@@ -1311,8 +1317,14 @@ public class AddTagsCommand : PageCommand {
     }
     
     public override void undo() {
-        foreach (SourceProxy tag_proxy in map.keys)
-            ((Tag) tag_proxy.get_source()).detach_many(map.get(tag_proxy));
+        foreach (SourceProxy tag_proxy in map.keys) {
+            Tag tag = (Tag) tag_proxy.get_source();
+
+            tag.detach_many(map.get(tag_proxy));
+            
+            if (tag.get_sources_count() == 0)
+                Tag.global.destroy_marked(Tag.global.mark(tag), true);
+        }
     }
     
     private void on_source_destroyed(DataSource source) {
@@ -1334,10 +1346,12 @@ public class RenameTagCommand : SimpleProxyableCommand {
     private string old_name;
     private string new_name;
     
+    // NOTE: new_name should be a name, not a path
     public RenameTagCommand(Tag tag, string new_name) {
-        base (tag, Resources.rename_tag_label(tag.get_name(), new_name), tag.get_name());
+        base (tag, Resources.rename_tag_label(tag.get_user_visible_name(), new_name),
+            tag.get_name());
         
-        old_name = tag.get_name();
+        old_name = tag.get_user_visible_name();
         this.new_name = new_name;
     }
     
@@ -1353,11 +1367,32 @@ public class RenameTagCommand : SimpleProxyableCommand {
 }
 
 public class DeleteTagCommand : SimpleProxyableCommand {
+    Gee.List<SourceProxy>? recursive_victim_proxies = null;
+
     public DeleteTagCommand(Tag tag) {
-        base (tag, Resources.delete_tag_label(tag.get_name()), tag.get_name());
+        base (tag, Resources.delete_tag_label(tag.get_user_visible_name()), tag.get_name());
     }
     
     protected override void execute_on_source(DataSource source) {
+        Tag tag = (Tag) source;
+        
+        Gee.List<Tag>? recursive_victims = tag.get_hierarchical_children();
+        
+        // if this tag has no children just destroy it and do a short-circuit return
+        if (recursive_victims.size == 0) {
+            Tag.global.destroy_marked(Tag.global.mark(source), false);
+            return;
+        }
+        
+        // okay, this tag has children, so they need to be proxied and deleted as well
+        recursive_victim_proxies = new Gee.ArrayList<SourceProxy>();
+        
+        foreach (Tag victim in recursive_victims) {
+            recursive_victim_proxies.add(victim.get_proxy());
+
+            Tag.global.destroy_marked(Tag.global.mark(victim), false);
+        }
+        
         Tag.global.destroy_marked(Tag.global.mark(source), false);
     }
     
@@ -1365,6 +1400,203 @@ public class DeleteTagCommand : SimpleProxyableCommand {
         // merely instantiating the Tag will rehydrate it ... should always work, because the 
         // undo stack is cleared if the proxy ever breaks
         assert(source is Tag);
+               
+        if (recursive_victim_proxies != null) {
+            for (int i = recursive_victim_proxies.size - 1; i >= 0; i--) {
+                DataSource victim_source = recursive_victim_proxies.get(i).get_source();
+                assert(victim_source is Tag);
+            }
+        }
+    }
+}
+
+public class NewChildTagCommand : SimpleProxyableCommand {
+    Tag? created_child = null;
+    
+    public NewChildTagCommand(Tag tag) {
+        base (tag, _("Create Tag"), tag.get_name());
+    }
+    
+    protected override void execute_on_source(DataSource source) {
+        Tag tag = (Tag) source;
+        created_child = tag.create_new_child();
+    }
+    
+    protected override void undo_on_source(DataSource source) {
+        Tag.global.destroy_marked(Tag.global.mark(created_child), true);
+    }
+    
+    public Tag get_created_child() {
+        assert(created_child != null);
+        
+        return created_child;
+    }
+}
+
+public class NewRootTagCommand : PageCommand {
+    Tag? created = null;
+    
+    public NewRootTagCommand() {
+        base (_("Create Tag"), "");
+    }
+    
+    protected override void execute() {
+        created = Tag.create_new_root();
+        SourceProxy tag_proxy = created.get_proxy();
+        tag_proxy.broken.connect(on_proxy_broken);
+    }
+    
+    protected override void undo() {
+        Tag.global.destroy_marked(Tag.global.mark(created), true);
+    }
+    
+    public Tag get_created_tag() {
+        assert(created != null);
+        
+        return created;
+    }
+    
+    private void on_proxy_broken() {
+        get_command_manager().reset();
+    }
+}
+
+public class ReparentTagCommand : PageCommand {
+    string basename;
+    string from_path;
+    string to_path;
+    
+    public ReparentTagCommand(Tag tag, string new_parent_path) {
+        base (_("Move Tag \"%s\"").printf(tag.get_user_visible_name()), "");
+
+        this.basename = tag.get_user_visible_name();
+        this.from_path = tag.get_path();
+
+        bool has_children = (tag.get_hierarchical_children().size > 0);
+
+        if (new_parent_path == Tag.PATH_SEPARATOR_STRING)
+            this.to_path = (has_children) ? (Tag.PATH_SEPARATOR_STRING + basename) : basename;
+        else if (new_parent_path.has_prefix(Tag.PATH_SEPARATOR_STRING))
+            this.to_path = new_parent_path + Tag.PATH_SEPARATOR_STRING + basename;
+        else
+            this.to_path = Tag.PATH_SEPARATOR_STRING + new_parent_path + Tag.PATH_SEPARATOR_STRING +
+                basename;
+    }
+    
+    private void do_move(string from, string to) {
+        // make sure a tag corresponding to the from path exists -- this should always be true,
+        // given the way the constructor for this class works, but it's a sanity check
+        Tag? from_tag = null;
+        if (!Tag.exists(from))
+            error("do_move: can't move from tag with path '%s': tag doesn't exist.", from);
+        from_tag = Tag.for_path(from);
+        
+        // if the from tag has any children they need to be moved recursively with the from tag,
+        // so enumerate them
+        Gee.List<Tag> from_children = new Gee.ArrayList<Tag>();
+        from_children.add_all(from_tag.get_hierarchical_children());
+        
+        // make a list of all the sources in the from tag
+        Gee.Set<MediaSource> from_sources = new Gee.HashSet<MediaSource>();
+        from_sources.add_all(from_tag.get_sources());
+        
+        // keep track of which sources belong to which children since we need to recreate the
+        // child structure exactly
+        Gee.Map<string, Gee.Set<MediaSource>> child_structure =
+            new Gee.TreeMap<string, Gee.Set<MediaSource>>();
+        
+        // loop through sources and detach them
+        foreach (MediaSource source in from_sources) {
+            // detach the current source from all child tags of the from tag
+            foreach (Tag child in from_children) {
+                string child_subpath = child.get_path().replace(from + Tag.PATH_SEPARATOR_STRING,
+                    "");
+                if (!child_structure.has_key(child_subpath))
+                    child_structure.set(child_subpath, new Gee.HashSet<MediaSource>());
+                
+                if (child.contains(source)) {
+                    child_structure.get(child_subpath).add(source);
+                }
+            }
+            
+            // detach the current source from the from tag itself
+            from_tag.detach(source);
+            
+            // detach the current source from all of the parent tags of the from tag
+            Tag? current_parent = from_tag.get_hierarchical_parent();
+            while (current_parent != null) {
+                current_parent.detach(source);
+                
+                current_parent = current_parent.get_hierarchical_parent();
+            }
+        }
+        
+        // find our new parent tag (if one exists) and promote it
+        Tag? new_parent = null;
+        if (to.has_prefix(Tag.PATH_SEPARATOR_STRING)) {
+            Gee.List<string> parent_paths = HierarchicalTagUtilities.enumerate_parent_paths(to);
+            if (parent_paths.size > 0) {
+                string immediate_parent_path = parent_paths.get(parent_paths.size - 1);
+                if (Tag.exists(immediate_parent_path))
+                    new_parent = Tag.for_path(immediate_parent_path);
+                else if (Tag.exists(immediate_parent_path.substring(1)))
+                    new_parent = Tag.for_path(immediate_parent_path.substring(1));
+                else
+                    assert_not_reached();
+            }
+        }    
+        if (new_parent != null)
+            new_parent.promote();
+
+        // get (or create) a tag for the destination path and attach all of the sources to it;
+        // also attach all of the sources to the parents of the destination tag, if any
+        Tag to_tag = Tag.for_path(to);
+        foreach (MediaSource current_from_source in from_sources) {
+            to_tag.attach(current_from_source);
+            
+            Tag? parent = to_tag.get_hierarchical_parent();
+            while (parent != null) {
+                parent.attach(current_from_source);
+            
+                parent = parent.get_hierarchical_parent();
+            }
+        }
+
+        // create our child paths, if any, and attach their sources
+        foreach (string curr_child_subpath in child_structure.keys) {
+            string curr_child_path = to_tag.get_path() + Tag.PATH_SEPARATOR_STRING +
+                curr_child_subpath;
+            Tag curr_child_tag = Tag.for_path(curr_child_path);
+            foreach (MediaSource src_in_child in child_structure.get(curr_child_subpath)) {
+                curr_child_tag.attach(src_in_child);
+            }
+        }
+        
+        // cleanup our old children
+        Tag.global.destroy_marked(Tag.global.mark_many(from_children), true);
+        
+        // cleanup our old tag -- keep in mind that when our children were removed, we
+        // may have been flattened
+        if (Tag.exists(from)) {
+            Tag.global.destroy_marked(Tag.global.mark(Tag.for_path(from)), true);
+            
+            return;
+        }
+        if (HierarchicalTagUtilities.enumerate_path_components(from).size == 1) {
+            string from_flat = HierarchicalTagUtilities.hierarchical_to_flat(from);
+            if (Tag.exists(from_flat))
+                Tag.global.destroy_marked(Tag.global.mark(Tag.for_path(from_flat)), true);
+                
+            return;
+        }
+    }
+    
+    public override void execute() {
+        do_move(from_path, to_path);
+    }
+    
+    public override void undo() {
+        do_move(to_path, from_path);
     }
 }
 
@@ -1378,27 +1610,32 @@ public class ModifyTagsCommand : SingleDataSourceCommand {
         
         this.media = media;
         
-        // Remove any tag that's in the original list but not the new one
+        // Prepare to remove all existing tags, if any, from the current media source.
         Gee.List<Tag>? original_tags = Tag.global.fetch_for_source(media);
         if (original_tags != null) {
             foreach (Tag tag in original_tags) {
-                if (!new_tag_list.contains(tag)) {
-                    SourceProxy proxy = tag.get_proxy();
-                    
-                    to_remove.add(proxy);
-                    proxy.broken.connect(on_proxy_broken);
-                }
+                SourceProxy proxy = tag.get_proxy();
+                to_remove.add(proxy);
+                proxy.broken.connect(on_proxy_broken);
             }
         }
         
-        // Add any tag that's in the new list but not the original
-        foreach (Tag tag in new_tag_list) {
-            if (original_tags == null || !original_tags.contains(tag)) {
-                SourceProxy proxy = tag.get_proxy();
-                
-                to_add.add(proxy);
-                proxy.broken.connect(on_proxy_broken);
-            }
+        // Prepare to add all new tags; remember, if a tag is added, its parent must be
+        // added as well. So enumerate all paths to add and then get the tags for them.
+        Gee.SortedSet<string> new_paths = new Gee.TreeSet<string>();
+        foreach (Tag new_tag in new_tag_list) {
+            string new_tag_path = new_tag.get_path();
+
+            new_paths.add(new_tag_path);
+            new_paths.add_all(HierarchicalTagUtilities.enumerate_parent_paths(new_tag_path));
+        }
+        
+        foreach (string path in new_paths) {
+            assert(Tag.exists(path));
+
+            SourceProxy proxy = Tag.for_path(path).get_proxy();
+            to_add.add(proxy);
+            proxy.broken.connect(on_proxy_broken);
         }
     }
     
@@ -1411,11 +1648,11 @@ public class ModifyTagsCommand : SingleDataSourceCommand {
     }
     
     public override void execute() {
-        foreach (SourceProxy proxy in to_add)
-            ((Tag) proxy.get_source()).attach(media);
-        
         foreach (SourceProxy proxy in to_remove)
             ((Tag) proxy.get_source()).detach(media);
+            
+        foreach (SourceProxy proxy in to_add)
+            ((Tag) proxy.get_source()).attach(media);
     }
     
     public override void undo() {
@@ -1437,8 +1674,8 @@ public class TagUntagPhotosCommand : SimpleProxyableCommand {
     
     public TagUntagPhotosCommand(Tag tag, Gee.Collection<MediaSource> sources, int count, bool attach) {
         base (tag,
-            attach ? Resources.tag_photos_label(tag.get_name(), count) 
-                : Resources.untag_photos_label(tag.get_name(), count),
+            attach ? Resources.tag_photos_label(tag.get_user_visible_name(), count) 
+                : Resources.untag_photos_label(tag.get_user_visible_name(), count),
             tag.get_name());
         
         this.sources = sources;
@@ -1657,3 +1894,219 @@ public class FlagUnflagCommand : MultipleDataSourceAtOnceCommand {
     }
 }
 
+#if ENABLE_FACES
+public class RemoveFacesFromPhotosCommand : SimpleProxyableCommand {
+    private Gee.Map<MediaSource, string> map_source_geometry = new Gee.HashMap<MediaSource, string>();
+    
+    public RemoveFacesFromPhotosCommand(Face face, Gee.Collection<MediaSource> sources, int count) {
+        base (face,
+            Resources.remove_face_from_photos_label(face.get_name(), count),
+            face.get_name());
+        
+        foreach (MediaSource source in sources) {
+            FaceLocation? face_location =
+                FaceLocation.get_face_location(face.get_face_id(), ((Photo) source).get_photo_id());
+            assert(face_location != null);
+            
+            this.map_source_geometry.set(source, face_location.get_serialized_geometry());
+        }
+        
+        LibraryPhoto.global.item_destroyed.connect(on_source_destroyed);
+        Video.global.item_destroyed.connect(on_source_destroyed);
+    }
+    
+    ~RemoveFacesFromPhotosCommand() {
+        LibraryPhoto.global.item_destroyed.disconnect(on_source_destroyed);
+        Video.global.item_destroyed.disconnect(on_source_destroyed);
+    }
+    
+    public override void execute_on_source(DataSource source) {
+        ((Face) source).detach_many(map_source_geometry.keys);
+    }
+    
+    public override void undo_on_source(DataSource source) {
+        Face face = (Face) source;
+        
+        face.attach_many(map_source_geometry.keys);
+        foreach (Gee.Map.Entry<MediaSource, string> entry in map_source_geometry.entries)
+            FaceLocation.create(face.get_face_id(), ((Photo) entry.key).get_photo_id(), entry.value);
+    }
+    
+    private void on_source_destroyed(DataSource source) {
+        if (map_source_geometry.keys.contains((MediaSource) source))
+            get_command_manager().reset();
+    }
+}
+
+public class RenameFaceCommand : SimpleProxyableCommand {
+    private string old_name;
+    private string new_name;
+    
+    public RenameFaceCommand(Face face, string new_name) {
+        base (face, Resources.rename_face_label(face.get_name(), new_name), face.get_name());
+        
+        old_name = face.get_name();
+        this.new_name = new_name;
+    }
+    
+    protected override void execute_on_source(DataSource source) {
+        if (!((Face) source).rename(new_name))
+            AppWindow.error_message(Resources.rename_face_exists_message(new_name));
+    }
+
+    protected override void undo_on_source(DataSource source) {
+        if (!((Face) source).rename(old_name))
+            AppWindow.error_message(Resources.rename_face_exists_message(old_name));
+    }
+}
+
+public class DeleteFaceCommand : SimpleProxyableCommand {
+    private Gee.Map<PhotoID?, string> photo_geometry_map =
+        new Gee.HashMap<PhotoID?, string>(FaceLocation.photo_id_hash, FaceLocation.photo_ids_equal);
+    
+    public DeleteFaceCommand(Face face) {
+        base (face, Resources.delete_face_label(face.get_name()), face.get_name());
+        
+        // we can't use the Gee.Map returned by FaceLocation.get_locations_by_face
+        // because it will be modified in execute_on_source
+        Gee.Map<PhotoID?, FaceLocation>? temp = FaceLocation.get_locations_by_face(face);
+        assert(temp != null);
+        foreach (Gee.Map.Entry<PhotoID?, FaceLocation> entry in temp.entries)
+            photo_geometry_map.set(entry.key, entry.value.get_serialized_geometry());
+    }
+    
+    protected override void execute_on_source(DataSource source) {
+        FaceID face_id = ((Face) source).get_face_id();
+        foreach (PhotoID photo_id in photo_geometry_map.keys)
+            FaceLocation.destroy(face_id, photo_id);
+        
+        Face.global.destroy_marked(Face.global.mark(source), false);
+    }
+    
+    protected override void undo_on_source(DataSource source) {
+        // merely instantiating the Face will rehydrate it ... should always work, because the 
+        // undo stack is cleared if the proxy ever breaks
+        assert(source is Face);
+        
+        foreach (Gee.Map.Entry<PhotoID?, string> entry in photo_geometry_map.entries) {
+            Photo? photo = LibraryPhoto.global.fetch(entry.key);
+            
+            if (photo != null) {
+                Face face = (Face) source;
+                
+                face.attach(photo);
+                FaceLocation.create(face.get_face_id(), entry.key, entry.value);
+            }
+        }
+    }
+}
+
+public class ModifyFacesCommand : SingleDataSourceCommand {
+    private MediaSource media;
+    private Gee.ArrayList<SourceProxy> to_add = new Gee.ArrayList<SourceProxy>();
+    private Gee.ArrayList<SourceProxy> to_remove = new Gee.ArrayList<SourceProxy>();
+    private Gee.Map<SourceProxy, string> to_update = new Gee.HashMap<SourceProxy, string>();
+    private Gee.Map<SourceProxy, string> geometries = new Gee.HashMap<SourceProxy, string>();
+    
+    public ModifyFacesCommand(MediaSource media, Gee.Map<Face, string> new_face_list) {
+        base (media, Resources.MODIFY_FACES_LABEL, "");
+        
+        this.media = media;
+        
+        // Remove any face that's in the original list but not the new one
+        Gee.Collection<Face>? original_faces = Face.global.fetch_for_source(media);
+        if (original_faces != null) {
+            foreach (Face face in original_faces) {
+                if (!new_face_list.keys.contains(face)) {
+                    SourceProxy proxy = face.get_proxy();
+                    
+                    to_remove.add(proxy);
+                    proxy.broken.connect(on_proxy_broken);
+                    
+                    FaceLocation? face_location =
+                        FaceLocation.get_face_location(face.get_face_id(), ((Photo) media).get_photo_id());
+                    assert(face_location != null);
+                    
+                    geometries.set(proxy, face_location.get_serialized_geometry());
+                }
+            }
+        }
+        
+        // Add any face that's in the new list but not the original
+        foreach (Gee.Map.Entry<Face, string> entry in new_face_list.entries) {
+            if (original_faces == null || !original_faces.contains(entry.key)) {
+                SourceProxy proxy = entry.key.get_proxy();
+                
+                to_add.add(proxy);
+                proxy.broken.connect(on_proxy_broken);
+                
+                geometries.set(proxy, entry.value);
+            } else {
+                // If it is already in the original list we need to check if it's
+                // geometry has changed.
+                FaceLocation? face_location =
+                    FaceLocation.get_face_location(entry.key.get_face_id(), ((Photo) media).get_photo_id());
+                assert(face_location != null);
+                
+                string old_geometry = face_location.get_serialized_geometry();
+                if (old_geometry != entry.value) {
+                    SourceProxy proxy = entry.key.get_proxy();
+                    
+                    to_update.set(proxy, entry.value);
+                    proxy.broken.connect(on_proxy_broken);
+                    
+                    geometries.set(proxy, old_geometry);
+                }
+            }
+        }
+    }
+    
+    ~ModifyFacesCommand() {
+        foreach (SourceProxy proxy in to_add)
+            proxy.broken.disconnect(on_proxy_broken);
+        
+        foreach (SourceProxy proxy in to_remove)
+            proxy.broken.disconnect(on_proxy_broken);
+        
+        foreach (SourceProxy proxy in to_update.keys)
+            proxy.broken.disconnect(on_proxy_broken);
+    }
+    
+    public override void execute() {
+        foreach (SourceProxy proxy in to_add) {
+            Face face = (Face) proxy.get_source();
+            face.attach(media);
+            FaceLocation.create(face.get_face_id(), ((Photo) media).get_photo_id(), geometries.get(proxy));
+        }
+        
+        foreach (SourceProxy proxy in to_remove)
+            ((Face) proxy.get_source()).detach(media);
+        
+        foreach (Gee.Map.Entry<SourceProxy, string> entry in to_update.entries) {
+            Face face = (Face) entry.key.get_source();
+            FaceLocation.create(face.get_face_id(), ((Photo) media).get_photo_id(), entry.value);
+        }
+    }
+    
+    public override void undo() {
+        foreach (SourceProxy proxy in to_add)
+            ((Face) proxy.get_source()).detach(media);
+        
+        foreach (SourceProxy proxy in to_remove) {
+            Face face = (Face) proxy.get_source();
+            face.attach(media);
+            FaceLocation.create(face.get_face_id(), ((Photo) media).get_photo_id(), geometries.get(proxy));
+        }
+        
+        foreach (SourceProxy proxy in to_update.keys) {
+            Face face = (Face) proxy.get_source();
+            FaceLocation.create(face.get_face_id(), ((Photo) media).get_photo_id(), geometries.get(proxy));
+        }
+    }
+    
+    private void on_proxy_broken() {
+        get_command_manager().reset();
+    }
+}
+
+#endif

@@ -370,7 +370,6 @@ public abstract class EditingHostPage : SinglePhotoPage {
     public const int TOOL_WINDOW_SEPARATOR = 8;
     public const int PIXBUF_CACHE_COUNT = 5;
     public const int ORIGINAL_PIXBUF_CACHE_COUNT = 5;
-    public const int KEY_REPEAT_INTERVAL_MSEC = 200;
     
     private class EditingHostCanvas : PhotoCanvas {
         private EditingHostPage host_page;
@@ -403,7 +402,6 @@ public abstract class EditingHostPage : SinglePhotoPage {
     private EditingTool current_tool = null;
     private Gtk.ToggleToolButton current_editing_toggle = null;
     private Gdk.Pixbuf cancel_editing_pixbuf = null;
-    private uint32 last_nav_key = 0;
     private bool photo_missing = false;
     private PixbufCache cache = null;
     private PixbufCache master_cache = null;
@@ -473,6 +471,11 @@ public abstract class EditingHostPage : SinglePhotoPage {
         enhance_button.clicked.connect(on_enhance);
         enhance_button.is_important = true;
         toolbar.insert(enhance_button, -1);
+        
+#if ENABLE_FACES
+        // faces tool
+        insert_faces_button(toolbar);
+#endif
 
         // separator to force next/prev buttons to right side of toolbar
         Gtk.SeparatorToolItem separator = new Gtk.SeparatorToolItem();
@@ -1611,6 +1614,13 @@ public abstract class EditingHostPage : SinglePhotoPage {
         return base.on_motion(event, x, y, mask);
     }
     
+    protected override bool on_leave_notify_event() {
+        if (current_tool != null)
+            return current_tool.on_leave_notify_event();
+        
+        return base.on_leave_notify_event();
+    }
+    
     private void track_tool_window() {
         // if editing tool window is present and the user hasn't touched it, it moves with the window
         if (current_tool != null) {
@@ -1685,32 +1695,9 @@ public abstract class EditingHostPage : SinglePhotoPage {
         if (on_zoom_slider_key_press(event))
             return true;
         
-        // if the user holds the arrow keys down, we will receive a steady stream of key press
-        // events for an operation that isn't designed for a rapid succession of output ... 
-        // we staunch the supply of new photos to under a quarter second (#533)
-        bool nav_ok = (event.time - last_nav_key) > KEY_REPEAT_INTERVAL_MSEC;
-        
         bool handled = true;
         
         switch (Gdk.keyval_name(event.keyval)) {
-            case "Left":
-            case "KP_Left":
-            case "BackSpace":
-                if (nav_ok) {
-                    on_previous_photo();
-                    last_nav_key = event.time;
-                }
-            break;
-            
-            case "Right":
-            case "KP_Right":
-            case "space":
-                if (nav_ok) {
-                    on_next_photo();
-                    last_nav_key = event.time;
-                }
-            break;
-
             // this block is only here to prevent base from moving focus to toolbar
             case "Down":
             case "KP_Down":
@@ -1957,7 +1944,7 @@ public abstract class EditingHostPage : SinglePhotoPage {
         return base.on_ctrl_released(event);
     }
     
-    private void on_tool_button_toggled(Gtk.ToggleToolButton toggle, EditingTool.Factory factory) {
+    protected void on_tool_button_toggled(Gtk.ToggleToolButton toggle, EditingTool.Factory factory) {
         // if the button is an activate, deactivate any current tool running; if the button is
         // a deactivate, deactivate the current tool and exit
         bool deactivating_only = (!toggle.active && current_editing_toggle == toggle);
@@ -2129,7 +2116,7 @@ public abstract class EditingHostPage : SinglePhotoPage {
             tool_window.present();
     }
     
-    public void on_next_photo() {
+    protected override void on_next_photo() {
         deactivate_tool();
         
         if (!has_photo())
@@ -2162,7 +2149,7 @@ public abstract class EditingHostPage : SinglePhotoPage {
         }
     }
     
-    public void on_previous_photo() {
+    protected override void on_previous_photo() {
         deactivate_tool();
         
         if (!has_photo())
@@ -2202,6 +2189,14 @@ public abstract class EditingHostPage : SinglePhotoPage {
     protected void unset_view_collection() {
         parent_view = null;
     }
+    
+    // This method is intentionally empty --its purpose is to allow overriding
+    // it in LibraryPhotoPage, since FacesTool must only be present in
+    // LibraryMode, but it need to be called from constructor of EditingHostPage
+    // to place it correctly in the toolbar.
+    protected virtual void insert_faces_button(Gtk.Toolbar toolbar) {
+        ;
+    }
 }
 
 //
@@ -2217,6 +2212,9 @@ public class LibraryPhotoPage : EditingHostPage {
     }
 
     private Gtk.Menu context_menu;
+#if ENABLE_FACES
+    private Gtk.ToggleToolButton faces_button = null;
+#endif
     private CollectionPage? return_page = null;
     private bool return_to_collection_on_release = false;
     private LibraryPhotoPageViewFilter filter = new LibraryPhotoPageViewFilter();
@@ -2519,6 +2517,14 @@ public class LibraryPhotoPage : EditingHostPage {
         Gtk.ActionEntry raw_developer = { "RawDeveloper", null, TRANSLATABLE, null, null, null };
         raw_developer.label = _("Developer");
         actions += raw_developer;
+        
+#if ENABLE_FACES   
+        Gtk.ActionEntry faces = { "Faces", Resources.CROP, TRANSLATABLE, "<Ctrl>F",
+            TRANSLATABLE, toggle_faces };
+        faces.label = Resources.FACES_MENU;
+        faces.tooltip = Resources.FACES_TOOLTIP;
+        actions += faces;
+#endif
         
         return actions;
     }
@@ -3052,7 +3058,7 @@ public class LibraryPhotoPage : EditingHostPage {
         try {
             get_photo().export(save_as, scaling, export_params.quality,
                 get_photo().get_export_format_for_parameters(export_params),
-                export_params.mode == ExportFormatMode.UNMODIFIED);
+                export_params.mode == ExportFormatMode.UNMODIFIED, export_params.export_metadata);
         } catch (Error err) {
             AppWindow.error_message(_("Unable to export %s: %s").printf(save_as.get_path(), err.message));
         }
@@ -3192,5 +3198,24 @@ public class LibraryPhotoPage : EditingHostPage {
         
         get_command_manager().execute(new ModifyTagsCommand(photo, new_tags));
     }
+
+#if ENABLE_FACES       
+    private void on_faces_toggled() {
+        on_tool_button_toggled(faces_button, FacesTool.factory);
+    }
+    
+    protected void toggle_faces() {
+        faces_button.set_active(!faces_button.get_active());
+    }
+    
+    protected override void insert_faces_button(Gtk.Toolbar toolbar) {
+        faces_button = new Gtk.ToggleToolButton.from_stock(Resources.FACES_TOOL);
+        faces_button.set_label(Resources.FACES_LABEL);
+        faces_button.set_tooltip_text(Resources.FACES_TOOLTIP);
+        faces_button.toggled.connect(on_faces_toggled);
+        faces_button.is_important = true;
+        toolbar.insert(faces_button, -1);
+    }
+#endif
 }
 

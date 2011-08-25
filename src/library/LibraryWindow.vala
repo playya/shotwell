@@ -45,18 +45,26 @@ public class LibraryWindow : AppWindow {
         SAVED_SEARCH,
         EVENTS,
         TAGS,
+#if ENABLE_FACES   
+        FACES,
+#endif
         TRASH,
         OFFLINE
     }
     
-    protected enum TargetType {
+    public enum TargetType {
         URI_LIST,
-        MEDIA_LIST
+        MEDIA_LIST,
+        TAG_PATH
     }
     
-    private const Gtk.TargetEntry[] DEST_TARGET_ENTRIES = {
+    public const string TAG_PATH_MIME_TYPE = "shotwell/tag-path";
+    public const string MEDIA_LIST_MIME_TYPE = "shotwell/media-id-atom";
+    
+    public const Gtk.TargetEntry[] DND_TARGET_ENTRIES = {
         { "text/uri-list", Gtk.TargetFlags.OTHER_APP, TargetType.URI_LIST },
-        { "shotwell/media-id-atom", Gtk.TargetFlags.SAME_APP, TargetType.MEDIA_LIST }
+        { MEDIA_LIST_MIME_TYPE, Gtk.TargetFlags.SAME_APP, TargetType.MEDIA_LIST },
+        { TAG_PATH_MIME_TYPE, Gtk.TargetFlags.SAME_WIDGET, TargetType.TAG_PATH }
     };
     
     // special Yorba-selected sidebar background color for standard themes (humanity,
@@ -143,6 +151,9 @@ public class LibraryWindow : AppWindow {
     private Sidebar.Tree sidebar_tree;
     private Library.Branch library_branch = new Library.Branch();
     private Tags.Branch tags_branch = new Tags.Branch();
+#if ENABLE_FACES   
+    private Faces.Branch faces_branch = new Faces.Branch();
+#endif
     private Library.TrashBranch trash_branch = new Library.TrashBranch();
     private Events.Branch events_branch = new Events.Branch();
     private Library.OfflineBranch offline_branch = new Library.OfflineBranch();
@@ -185,7 +196,7 @@ public class LibraryWindow : AppWindow {
     
     public LibraryWindow(ProgressMonitor progress_monitor) {
         // prep sidebar and add roots
-        sidebar_tree = new Sidebar.Tree(DEST_TARGET_ENTRIES, Gdk.DragAction.ASK,
+        sidebar_tree = new Sidebar.Tree(DND_TARGET_ENTRIES, Gdk.DragAction.ASK,
             external_drop_handler);
         
         sidebar_tree.page_created.connect(on_page_created);
@@ -195,6 +206,9 @@ public class LibraryWindow : AppWindow {
         
         sidebar_tree.graft(library_branch, SidebarRootPosition.LIBRARY);
         sidebar_tree.graft(tags_branch, SidebarRootPosition.TAGS);
+#if ENABLE_FACES   
+        sidebar_tree.graft(faces_branch, SidebarRootPosition.FACES);
+#endif
         sidebar_tree.graft(trash_branch, SidebarRootPosition.TRASH);
         sidebar_tree.graft(events_branch, SidebarRootPosition.EVENTS);
         sidebar_tree.graft(offline_branch, SidebarRootPosition.OFFLINE);
@@ -228,7 +242,13 @@ public class LibraryWindow : AppWindow {
         
         // set up main window as a drag-and-drop destination (rather than each page; assume
         // a drag and drop is for general library import, which means it goes to library_page)
-        Gtk.drag_dest_set(this, Gtk.DestDefaults.ALL, DEST_TARGET_ENTRIES,
+        Gtk.TargetEntry[] main_window_dnd_targets = {
+            DND_TARGET_ENTRIES[TargetType.URI_LIST],
+            DND_TARGET_ENTRIES[TargetType.MEDIA_LIST]
+            /* the main window accepts URI lists and media lists but not tag paths -- yet; we
+               might wish to support dropping tags onto photos at some future point */
+        };
+        Gtk.drag_dest_set(this, Gtk.DestDefaults.ALL, main_window_dnd_targets,
             Gdk.DragAction.COPY | Gdk.DragAction.LINK | Gdk.DragAction.ASK);
         
         MetadataWriter.get_instance().progress.connect(on_metadata_writer_progress);
@@ -519,6 +539,16 @@ public class LibraryWindow : AppWindow {
         else
             debug("No search entry found for rename");
     }
+    
+#if ENABLE_FACES
+    public void rename_face_in_sidebar(Face face) {
+        Faces.SidebarEntry? entry = faces_branch.get_entry_for_face(face);
+        if (entry != null)
+            sidebar_tree.rename_entry_in_place(entry);
+        else
+            assert_not_reached();
+    }
+#endif
     
     protected override void on_quit() {
         Config.Facade.get_instance().set_library_window_state(maximized, dimensions);
@@ -1352,7 +1382,12 @@ public class LibraryWindow : AppWindow {
         // Not all pages have sidebar entries
         Sidebar.Entry? entry = page_map.get(page);
         if (entry != null) {
-            sidebar_tree.expand_to_entry(entry);
+            // if the corresponding sidebar entry is an expandable entry and wants to be
+            // expanded when it's selected, then expand it
+            Sidebar.ExpandableEntry expandable_entry = entry as Sidebar.ExpandableEntry;
+            if (expandable_entry != null && expandable_entry.expand_on_select())
+                sidebar_tree.expand_to_entry(entry);
+
             sidebar_tree.place_cursor(entry, true);
         }
         

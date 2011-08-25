@@ -252,6 +252,13 @@ class PhotoImportSource : ImportSource {
     public PhotoImportSource? get_associated() {
         return associated;
     }
+    
+    public override bool internal_delete_backing() throws Error {
+        bool ret = base.internal_delete_backing();
+        if (associated != null)
+            ret &= associated.internal_delete_backing();
+        return ret;
+    }
 }
 
 class ImportPreview : MediaSourceItem {
@@ -380,14 +387,12 @@ public class CameraAccumulator : Object, Core.TrackerAccumulator {
         total++;
         
         PhotoImportSource? photo = source as PhotoImportSource;
-        if (photo != null) {
+        if (photo != null && photo.get_file_format() != PhotoFileFormat.RAW)
             photos++;
-            
-            if (photo.get_file_format() == PhotoFileFormat.RAW)
-                raw++;
-        } else if (source is VideoImportSource) {
+        else if (photo != null && photo.get_file_format() == PhotoFileFormat.RAW)
+            raw++;
+        else if (source is VideoImportSource)
             videos++;
-        }
         
         // because of total, always fire "updated"
         return true;
@@ -399,14 +404,12 @@ public class CameraAccumulator : Object, Core.TrackerAccumulator {
         total++;
         
         PhotoImportSource? photo = source as PhotoImportSource;
-        if (photo != null) {
+        if (photo != null && photo.get_file_format() != PhotoFileFormat.RAW) {
             assert(photos > 0);
             photos--;
-            
-            if (photo.get_file_format() == PhotoFileFormat.RAW) {
-                assert(raw > 0);
-                raw--;
-            }
+        } else if (photo != null && photo.get_file_format() == PhotoFileFormat.RAW) {
+            assert(raw > 0);
+            raw--;
         } else if (source is VideoImportSource) {
             assert(videos > 0);
             videos--;
@@ -730,7 +733,7 @@ public class ImportPage : CheckerboardPage {
         hide_imported.set_tooltip_text(_("Only display photos that have not been imported"));
         hide_imported.clicked.connect(on_hide_imported);
         hide_imported.sensitive = false;
-        hide_imported.active = false;
+        hide_imported.active = Config.Facade.get_instance().get_hide_photos_already_imported();
         Gtk.ToolItem hide_item = new Gtk.ToolItem();
         hide_item.is_important = true;
         hide_item.add(hide_imported);
@@ -1467,11 +1470,12 @@ public class ImportPage : CheckerboardPage {
     }
     
     private void on_hide_imported() {
-        if (hide_imported.get_active()) {
+        if (hide_imported.get_active())
             get_view().install_view_filter(hide_imported_filter);
-        } else {
+        else
             get_view().remove_view_filter(hide_imported_filter);
-        }
+        
+        Config.Facade.get_instance().set_hide_photos_already_imported(hide_imported.get_active());
     }
     
     private void on_import_selected() {

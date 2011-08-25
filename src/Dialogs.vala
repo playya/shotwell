@@ -13,7 +13,7 @@ public bool confirm_delete_tag(Tag tag) {
     string msg = ngettext(
         "This will remove the tag \"%s\" from one photo.  Continue?",
         "This will remove the tag \"%s\" from %d photos.  Continue?",
-        count).printf(tag.get_name(), count);
+        count).printf(tag.get_user_visible_name(), count);
     
     return AppWindow.negate_affirm_question(msg, _("_Cancel"), _("_Delete"),
         Resources.DELETE_TAG_TITLE);
@@ -26,6 +26,21 @@ public bool confirm_delete_saved_search(SavedSearch search) {
     return AppWindow.negate_affirm_question(msg, _("_Cancel"), _("_Delete"),
         Resources.DELETE_SAVED_SEARCH_DIALOG_TITLE);
 }
+
+#if ENABLE_FACES   
+
+public bool confirm_delete_face(Face face) {
+    int count = face.get_sources_count();
+    string msg = ngettext(
+        "This will remove the face \"%s\" from one photo.  Continue?",
+        "This will remove the face \"%s\" from %d photos.  Continue?",
+        count).printf(face.get_name(), count);
+    
+    return AppWindow.negate_affirm_question(msg, _("_Cancel"), _("_Delete"),
+        Resources.DELETE_FACE_TITLE);
+}
+
+#endif
 
 }
 
@@ -140,6 +155,7 @@ public class ExportDialog : Gtk.Dialog {
     private Gtk.ComboBox quality_combo;
     private Gtk.ComboBox constraint_combo;
     private Gtk.ComboBox format_combo;
+    private Gtk.CheckButton export_metadata;
     private Gee.ArrayList<string> format_options = new Gee.ArrayList<string>();
     private Gtk.Entry pixels_entry;
     private Gtk.Widget ok_button;
@@ -204,6 +220,10 @@ public class ExportDialog : Gtk.Dialog {
         pixels_box.pack_start(pixels_entry, false, false, 0);
         pixels_box.pack_end(pixels_label, false, false, 0);
         add_control(pixels_box, 1, 3);
+        
+        export_metadata = new Gtk.CheckButton.with_label(_("Export metadata"));
+        add_control(export_metadata, 1, 4);
+        export_metadata.active = true;
         
         ((Gtk.VBox) get_content_area()).add(table);
         
@@ -300,6 +320,8 @@ public class ExportDialog : Gtk.Dialog {
                 assert(scale > 0);
             current_scale = scale;
             
+            parameters.export_metadata = export_metadata.sensitive ? export_metadata.active : false;
+            
             if (format_combo.get_active_text() == UNMODIFIED_FORMAT_LABEL) {
                 parameters.mode = current_parameters.mode = ExportFormatMode.UNMODIFIED;
             } else if (format_combo.get_active_text() == CURRENT_FORMAT_LABEL) {
@@ -364,6 +386,7 @@ public class ExportDialog : Gtk.Dialog {
             constraint_combo.set_sensitive(false);
             quality_combo.set_sensitive(false);
             pixels_entry.sensitive = false;
+            export_metadata.sensitive = false;
         } else if (format_combo.get_active_text() == CURRENT_FORMAT_LABEL) {
             // if the user wishes to export the media in its current format, we allow sizing but
             // not JPEG quality customization, because in a batch of many photos, it's not
@@ -373,7 +396,8 @@ public class ExportDialog : Gtk.Dialog {
             // format.
             constraint_combo.set_sensitive(true);
             quality_combo.set_sensitive(false);
-            pixels_entry.sensitive = !original;            
+            pixels_entry.sensitive = !original;
+            export_metadata.sensitive = true;
         } else {
             // if the user has chosen a specific format, then allow JPEG quality customization if
             // the format is JPEG and the user is re-sizing the image, otherwise, disallow JPEG
@@ -381,6 +405,7 @@ public class ExportDialog : Gtk.Dialog {
             constraint_combo.set_sensitive(true);
             bool jpeg = get_specified_format() == PhotoFileFormat.JFIF;
             quality_combo.sensitive = !original && jpeg;
+            export_metadata.sensitive = true;
         }
     }
     
@@ -702,9 +727,8 @@ public abstract class TextEntryDialogMediator {
 // for a HIG-compliant alert dialog. Please see 
 // http://library.gnome.org/devel/hig-book/2.32/windows-alert.html.en for details.
 public string build_alert_body_text(string? primary_text, string? secondary_text) {
-    primary_text = (primary_text == null) ? "" : primary_text;
-    secondary_text = (secondary_text == null) ? "" : secondary_text;
-    return "<span weight=\"Bold\" size=\"larger\">%s</span>\n%s".printf(primary_text, secondary_text);
+    return "<span weight=\"Bold\" size=\"larger\">%s</span>\n%s".printf(
+        guarded_markup_escape_text(primary_text), guarded_markup_escape_text(secondary_text));
 }
 
 // Entry completion for values separated by separators (e.g. comma in the case of tags)
@@ -1500,7 +1524,8 @@ public void multiple_object_error_dialog(Gee.ArrayList<DataObject> objects, stri
 
 public abstract class TagsDialog : TextEntryDialogMediator {
     public TagsDialog(string title, string label, string? initial_text = null) {
-        base (title, label, initial_text, Tag.global.get_all_names(), ",");
+        base (title, label, initial_text, HierarchicalTagIndex.get_global_index().get_all_tags(),
+            ",");
     }
 }
 
@@ -1520,6 +1545,9 @@ public class AddTagsDialog : TagsDialog {
     }
 
     protected override bool on_modify_validate(string text) {
+        if (text.contains(Tag.PATH_SEPARATOR_STRING))
+            return false;
+            
         // Can't simply call Tag.prep_tag_names().length because of this bug:
         // https://bugzilla.gnome.org/show_bug.cgi?id=602208
         string[] names = Tag.prep_tag_names(text.split(","));
@@ -1535,23 +1563,24 @@ public class ModifyTagsDialog : TagsDialog {
     }
     
     private static string? get_initial_text(MediaSource source) {
-        Gee.SortedSet<Tag>? sorted_tags = Tag.global.fetch_sorted_for_source(source);
-        
-        if (sorted_tags == null)
+        Gee.Collection<Tag>? source_tags = Tag.global.fetch_for_source(source);
+        if (source_tags == null)
             return null;
+
+        Gee.Collection<Tag> terminal_tags = Tag.get_terminal_tags(source_tags);
         
-        string[] tag_names = new string[0];
-		foreach (Tag tag in sorted_tags)
-            tag_names += tag.get_name();
+        Gee.SortedSet<string> tag_basenames = new Gee.TreeSet<string>();
+		foreach (Tag tag in terminal_tags)
+            tag_basenames.add(HierarchicalTagUtilities.get_basename(tag.get_path()));
         
         string? text = null;
-        foreach (string tag in tag_names) {
+        foreach (string name in tag_basenames) {
             if (text == null)
                 text = "";
             else
                 text += ", ";
             
-            text += tag;
+            text += name;
         }
         
         return text;
@@ -1570,12 +1599,19 @@ public class ModifyTagsDialog : TagsDialog {
         
         // break up by comma-delimiter, prep for use, and separate into list
         string[] tag_names = Tag.prep_tag_names(text.split(","));
+        
+        tag_names = HierarchicalTagIndex.get_global_index().get_paths_for_names_array(tag_names);
 
         foreach (string name in tag_names)
-            new_tags.add(Tag.for_name(name));
+            new_tags.add(Tag.for_path(name));
         
         return new_tags;
     }
+    
+    protected override bool on_modify_validate(string text) {
+        return (!text.contains(Tag.PATH_SEPARATOR_STRING));
+    }
+    
 }
 
 public class WelcomeDialog : Gtk.Dialog {

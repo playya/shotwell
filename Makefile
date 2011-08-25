@@ -1,7 +1,11 @@
 PROGRAM = shotwell
 PROGRAM_THUMBNAILER = shotwell-video-thumbnailer
 
+<<<<<<< HEAD
 VERSION = 0.10.0+git$(shell git rev-parse HEAD|cut -c -8)
+=======
+VERSION = 0.10.90+trunk
+>>>>>>> 3af94b9b7537b867703b822ea4511ed6a4d1d3c4
 GETTEXT_PACKAGE = $(PROGRAM)
 BUILD_ROOT = 1
 
@@ -36,10 +40,6 @@ VALAFLAGS := -g --enable-checking --thread --fatal-warnings $(USER_VALAFLAGS)
 
 DEFINES := _PREFIX='"$(PREFIX)"' _VERSION='"$(VERSION)"' GETTEXT_PACKAGE='"$(GETTEXT_PACKAGE)"' \
 	_LANG_SUPPORT_DIR='"$(SYSTEM_LANG_DIR)"' _LIB='"${LIB}"'
-
-ifdef USE_LEGACY_CONFIG_SYSTEM
-VALA_DEFINES := $(VALA_DEFINES) --define USE_LEGACY_CONFIG_SYSTEM
-endif
 
 EXPORT_FLAGS = -export-dynamic
 
@@ -127,15 +127,19 @@ RESOURCE_FILES = \
 	set_background_dialog.glade \
 	shotwell.glade \
 	shotwell.xml \
-	sidebar_default.ui \
+	sidebar_default_context.ui \
 	tags.ui \
-	trash.ui
+	trash.ui \
+	search_sidebar_context.ui \
+	tag_sidebar_context.ui
 
 SYS_INTEGRATION_FILES = \
 	shotwell.desktop.head \
 	shotwell-viewer.desktop.head \
 	shotwell.schemas \
-	org.yorba.shotwell.gschema.xml
+	org.yorba.shotwell.gschema.xml \
+	org.yorba.shotwell-extras.gschema.xml \
+	shotwell.convert
 
 SRC_HEADER_FILES = \
 	gphoto.h
@@ -267,6 +271,7 @@ EXT_PKGS = \
 	gmodule-2.0 \
 	gstreamer-0.10 \
 	gstreamer-base-0.10 \
+	gstreamer-pbutils-0.10 \
 	gtk+-2.0 \
 	gudev-1.0 \
 	libexif \
@@ -275,10 +280,8 @@ EXT_PKGS = \
 	libxml-2.0 \
 	sqlite3 \
 	unique-1.0 \
-	webkit-1.0
-ifdef USE_LEGACY_CONFIG_SYSTEM
-EXT_PKGS += gconf-2.0
-endif
+	webkit-1.0 \
+	gconf-2.0
 
 THUMBNAILER_PKGS = \
     gtk+-2.0 \
@@ -301,6 +304,7 @@ EXT_PKG_VERSIONS = \
 	gmodule-2.0 >= 2.24.0 \
 	gstreamer-0.10 >= 0.10.28 \
 	gstreamer-base-0.10 >= 0.10.28 \
+	gstreamer-pbutils-0.10 >= 0.10.32 \
 	gtk+-2.0 >= 2.18.0 \
 	gudev-1.0 >= 145 \
 	libexif >= 0.6.16 \
@@ -309,10 +313,8 @@ EXT_PKG_VERSIONS = \
 	libxml-2.0 >= 2.6.32 \
 	sqlite3 >= 3.5.9 \
 	unique-1.0 >= 1.0.0 \
-	webkit-1.0 >= 1.1.5
-ifdef USE_LEGACY_CONFIG_SYSTEM
-EXT_PKG_VERSIONS += gconf-2.0 >= 2.22.0
-endif
+	webkit-1.0 >= 1.1.5 \
+	gconf-2.0 >= 2.22.0
 
 ifdef ENABLE_TESTS
 EXT_PKGS += valadate-1.0
@@ -546,7 +548,10 @@ install:
 	$(INSTALL_DATA) icons/shotwell-24.svg $(DESTDIR)$(PREFIX)/share/icons/hicolor/24x24/apps/shotwell.svg
 	mkdir -p $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas
 	$(INSTALL_DATA) misc/org.yorba.shotwell.gschema.xml $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas
+	$(INSTALL_DATA) misc/org.yorba.shotwell-extras.gschema.xml $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas
 	glib-compile-schemas $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas
+	mkdir -p $(DESTDIR)/usr/share/GConf/gsettings
+	$(INSTALL_DATA) misc/shotwell.convert $(DESTDIR)/usr/share/GConf/gsettings
 ifndef DISABLE_ICON_UPDATE
 	-gtk-update-icon-cache -t -f $(DESTDIR)$(PREFIX)/share/icons/hicolor || :
 endif
@@ -634,7 +639,9 @@ ifdef INSTALL_HEADERS
 	rm -f $(DESTDIR)$(PREFIX)/$(LIB)/pkgconfig/$(PC_FILE)
 endif
 	rm -f $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas/org.yorba.shotwell.gschema.xml
+	rm -f $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas/org.yorba.shotwell-extras.gschema.xml
 	glib-compile-schemas $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas
+	rm -f $(DESTDIR)/usr/share/GConf/gsettings/shotwell.convert
 
 $(PC_FILE): $(PC_INPUT) $(MAKE_FILES)
 	m4 '-D_VERSION_=$(VERSION)' '-D_PREFIX_=$(PREFIX)' '-D_REQUIREMENTS_=$(PLUGIN_PKG_REQS)' \

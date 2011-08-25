@@ -28,13 +28,45 @@ private class VideoUpdates : MonitorableUpdates {
     public bool is_check_interpretable() {
         return check_interpretable;
     }
+    
+    public override bool is_all_updated() {
+        return (check_interpretable == false) && base.is_all_updated();
+    }
 }
 
 private class VideoMonitor : MediaMonitor {
     private const int MAX_INTERPRETABLE_CHECKS_PER_CYCLE = 5;
     
+    // Performs interpretable check on video. In a background job because
+    // this will create a new thumbnail for the video.
+    private class VideoInterpretableCheckJob : BackgroundJob {
+        private Video video;
+        
+        public VideoInterpretableCheckJob(Video video, CompletionCallback? callback = null) {
+            base (video, callback);
+            this.video = video;
+        }
+        
+        public override void execute() {
+            video.check_is_interpretable();
+        }
+    }
+    
+    // Work queue for video thumbnailing.
+    // Note: only using 1 thread. If we want to change this to use multiple
+    // threads, we need to put a lock around background_jobs wherever it's modified.
+    private Workers workers = new Workers(1, false);
+    private uint64 background_jobs = 0;
+    
     public VideoMonitor(Cancellable cancellable) {
         base (Video.global, cancellable);
+                
+        foreach (DataObject obj in Video.global.get_all()) {
+            Video video = obj as Video;
+            assert (video != null);
+            if (!video.get_is_interpretable())
+                set_check_interpretable(video, true);
+        }
     }
     
     protected override MonitorableUpdates create_updates(Monitorable monitorable) {
@@ -239,18 +271,18 @@ private class VideoMonitor : MediaMonitor {
         if (check != null) {
             mdbg("Checking interpretable for %d videos".printf(check.size));
             
-            // right now, videos will regenerate their thumbnails if they're not interpretable as
-            // they come online, serially and sequentially. Because video thumbnail regeneration is
-            // expensive, we might choose to do this in parallel. If this happens, it's extremely
-            // important that notify_offline_thumbs_regenerated() be called only after all
-            // regeneration activity has completed.
             Video.notify_offline_thumbs_regenerated();
             
+            background_jobs += check.size;
             foreach (Video video in check)
-                video.check_is_interpretable();
-            
-            Video.notify_normal_thumbs_regenerated();
+                workers.enqueue(new VideoInterpretableCheckJob(video, on_interpretable_check_complete));
         }
+    }
+    
+    void on_interpretable_check_complete(BackgroundJob job) {
+        --background_jobs;
+        if (background_jobs <= 0)
+            Video.notify_normal_thumbs_regenerated();
     }
 }
 

@@ -151,6 +151,10 @@ public abstract class MediaPage : CheckerboardPage {
             zoom_in_box.button_press_event.connect(on_zoom_in_pressed);
 
             zoom_group.pack_start(zoom_in_box, false, false, 0);
+            
+            // spacer to push away from Ubuntu resize handles
+            zoom_group.pack_start(new Gtk.HBox(true, Resources.RESIZE_HANDLE_SPACER), 
+                false, false, Resources.RESIZE_HANDLE_SPACER);
 
             add(zoom_group);
         }
@@ -870,8 +874,10 @@ public abstract class MediaPage : CheckerboardPage {
         
         AddTagsDialog dialog = new AddTagsDialog();
         string[]? names = dialog.execute();
+        
         if (names != null) {
-            get_command_manager().execute(new AddTagsCommand(names, 
+            get_command_manager().execute(new AddTagsCommand(
+                HierarchicalTagIndex.get_global_index().get_paths_for_names_array(names),
                 (Gee.Collection<MediaSource>) get_view().get_selected_sources()));
         }
     }

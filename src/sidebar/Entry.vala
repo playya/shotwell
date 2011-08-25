@@ -30,6 +30,8 @@ public interface Sidebar.ExpandableEntry : Sidebar.Entry {
     public abstract Icon? get_sidebar_open_icon();
     
     public abstract Icon? get_sidebar_closed_icon();
+    
+    public abstract bool expand_on_select();
 }
 
 public interface Sidebar.SelectableEntry : Sidebar.Entry {
@@ -60,5 +62,9 @@ public interface Sidebar.DestroyableEntry : Sidebar.Entry {
 public interface Sidebar.InternalDropTargetEntry : Sidebar.Entry {
     // Returns true if drop was successful
     public abstract bool internal_drop_received(Gee.List<MediaSource> sources);
+    public abstract bool internal_drop_received_arbitrary(Gtk.SelectionData data);
 }
 
+public interface Sidebar.InternalDragSourceEntry : Sidebar.Entry {
+    public abstract void prepare_selection_data(Gtk.SelectionData data);
+}

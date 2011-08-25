@@ -129,6 +129,7 @@ private class BasicProperties : Properties {
     private string iso;
     private double clip_duration;
     private string raw_developer;
+    private string raw_assoc;
 
     public BasicProperties() {
     }
@@ -146,6 +147,7 @@ private class BasicProperties : Properties {
         iso = "";
         clip_duration = 0.0;
         raw_developer = "";
+        raw_assoc = "";
     }
 
     protected override void get_single_properties(DataView view) {
@@ -185,7 +187,9 @@ private class BasicProperties : Properties {
                 dimensions = ((PhotoSource) source).get_dimensions();
             
             if (source is Photo && ((Photo) source).get_master_file_format() == PhotoFileFormat.RAW) {
-                raw_developer = ((Photo) source).get_raw_developer().get_label();
+                Photo photo = source as Photo;
+                raw_developer = photo.get_raw_developer().get_label();
+                raw_assoc = photo.is_raw_developer_available(RawDeveloper.CAMERA) ? _("RAW + JPEG") : "";
             }
         } else if (source is EventSource) {
             EventSource event_source = (EventSource) source;
@@ -283,7 +287,7 @@ private class BasicProperties : Properties {
 
         // display the title if a Tag page
         if (title == "" && page is TagPage)
-            title = ((TagPage) page).get_tag().get_name();
+            title = ((TagPage) page).get_tag().get_user_visible_name();
             
         if (title != "")
             add_line(_("Title:"), guarded_markup_escape_text(title));
@@ -356,6 +360,10 @@ private class BasicProperties : Properties {
         if (raw_developer != "") {
             add_line(_("Developer:"), raw_developer);
         }
+        
+        // RAW+JPEG flag.
+        if (raw_assoc != "")
+            add_line("", raw_assoc);
 
         if (exposure != "" || aperture != "" || iso != "") {
             string line = null;
@@ -399,7 +407,6 @@ private class BasicProperties : Properties {
 private class ExtendedPropertiesWindow : Gtk.Dialog {
     private ExtendedProperties properties = null;
     private const int FRAME_BORDER = 6;
-    private const int RESIZE_HANDLE_SPACER = 8;
     private Gtk.Button close_button;
 
     private class ExtendedProperties : Properties {
@@ -535,9 +542,9 @@ private class ExtendedPropertiesWindow : Gtk.Dialog {
         close_button.clicked.connect(on_close_clicked);
     
         // Move the buttons away from where Unity window
-        // manager on Ubuntu 11.04 puts resize handles
+        // manager on Ubuntu puts resize handles
         Gtk.Alignment action_alignment = new Gtk.Alignment(1, 0.5f, 1, 1);
-        action_alignment.set_padding(0, 0, 0, RESIZE_HANDLE_SPACER);
+        action_alignment.set_padding(0, 0, 0, Resources.RESIZE_HANDLE_SPACER);
         action_alignment.add(close_button);
         action_area.add(action_alignment);
     }
