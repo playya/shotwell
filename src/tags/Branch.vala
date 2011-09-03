@@ -107,7 +107,8 @@ public class Tags.Branch : Sidebar.Branch {
     }
 }
 
-public class Tags.Grouping : Sidebar.Grouping, Sidebar.InternalDropTargetEntry, Sidebar.Contextable {
+public class Tags.Grouping : Sidebar.Grouping, Sidebar.InternalDropTargetEntry, 
+    Sidebar.InternalDragSourceEntry, Sidebar.Contextable {
     private Gtk.UIManager ui = new Gtk.UIManager();
     private Gtk.Menu? context_menu = null;
     
@@ -154,15 +155,19 @@ public class Tags.Grouping : Sidebar.Grouping, Sidebar.InternalDropTargetEntry, 
     public bool internal_drop_received_arbitrary(Gtk.SelectionData data) {
         if (data.get_data_type().name() == LibraryWindow.TAG_PATH_MIME_TYPE) {
             string old_tag_path = (string) data.get_data();
-            assert (Tag.exists(old_tag_path));
+            assert (Tag.global.exists(old_tag_path));
             
-            ReparentTagCommand cmd = new ReparentTagCommand(Tag.for_path(old_tag_path), "/");
-            cmd.execute();
+            AppWindow.get_command_manager().execute(
+                new ReparentTagCommand(Tag.for_path(old_tag_path), "/"));
             
             return true;
         }
         
         return false;
+    }
+    
+    public void prepare_selection_data(Gtk.SelectionData data) {
+        ;
     }
 
     public Gtk.Menu? get_sidebar_context_menu(Gdk.EventButton event) {
@@ -216,10 +221,10 @@ public class Tags.SidebarEntry : Sidebar.SimplePageEntry, Sidebar.RenameableEntr
         if (prepped == null)
             return;
         
-        if (!Tag.global.exists(prepped))
-            AppWindow.get_command_manager().execute(new RenameTagCommand(tag, prepped));
-        else if (prepped != tag.get_name())
-            AppWindow.error_message(Resources.rename_tag_exists_message(prepped));
+        if (prepped == tag.get_user_visible_name())
+            return;
+        
+        AppWindow.get_command_manager().execute(new RenameTagCommand(tag, prepped));
     }
     
     public void destroy_source() {
@@ -237,10 +242,27 @@ public class Tags.SidebarEntry : Sidebar.SimplePageEntry, Sidebar.RenameableEntr
     public bool internal_drop_received_arbitrary(Gtk.SelectionData data) {
         if (data.get_data_type().name() == LibraryWindow.TAG_PATH_MIME_TYPE) {
             string old_tag_path = (string) data.get_data();
-            assert (Tag.exists(old_tag_path));
+
+            // if we're dragging onto ourself, it's a no-op
+            if (old_tag_path == tag.get_path())
+                return true;
+
+            // if we're dragging onto one of our children, it's a no-op
+            foreach (string parent_path in HierarchicalTagUtilities.enumerate_parent_paths(tag.get_path())) {
+                if (parent_path == old_tag_path)
+                    return true;
+            }
+
+            assert (Tag.global.exists(old_tag_path));
             
-            ReparentTagCommand cmd = new ReparentTagCommand(Tag.for_path(old_tag_path), tag.get_path());
-            cmd.execute();
+            // if we're dragging onto our parent, it's a no-op
+            Tag old_tag = Tag.for_path(old_tag_path);
+            Tag old_tag_parent = old_tag.get_hierarchical_parent();
+            if (old_tag_parent != null && old_tag_parent.get_path() == tag.get_path())
+                return true;
+            
+            AppWindow.get_command_manager().execute(
+                new ReparentTagCommand(old_tag, tag.get_path()));
             
             return true;
         }

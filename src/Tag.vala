@@ -83,8 +83,8 @@ public class TagSourceCollection : ContainerSourceCollection {
         return (Tag) fetch_by_key(tag_id.id);
     }
     
-    public bool exists(string name) {
-        return name_map.has_key(name);
+    public bool exists(string name, bool treat_htags_as_root = false) {
+        return fetch_by_name(name, treat_htags_as_root) != null;
     }
     
     public Gee.Collection<string> get_all_names() {
@@ -108,7 +108,22 @@ public class TagSourceCollection : ContainerSourceCollection {
     }
     
     // Returns null if not Tag with name exists.
-    public Tag? fetch_by_name(string name) {
+    // treat_htags_as_root: set to true if you want this function to treat htags as root tags
+    public Tag? fetch_by_name(string name, bool treat_htags_as_root = false) {
+        if (treat_htags_as_root) {
+            if (name.has_prefix(Tag.PATH_SEPARATOR_STRING)) {
+                if (HierarchicalTagUtilities.enumerate_path_components(name).size == 1) {
+                    Tag? tag = name_map.get(HierarchicalTagUtilities.hierarchical_to_flat(name));
+                    if (tag != null)
+                        return tag;
+                 }
+            } else {
+                Tag? tag = name_map.get(HierarchicalTagUtilities.flat_to_hierarchical(name));
+                if (tag != null)
+                    return tag;
+            }
+        }
+        
         return name_map.get(name);
     }
     
@@ -450,10 +465,9 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
     // Returns a Tag for the path, creating a new empty one if it does not already exist.
     // path should have already been prepared by prep_tag_name.
     public static Tag for_path(string name) {
-        Tag? tag = global.fetch_by_name(name);
-        if (tag == null) {
+        Tag? tag = global.fetch_by_name(name, true);
+        if (tag == null)
             tag = global.restore_tag_from_holding_tank(name);
-        }
         
         if (tag != null)
             return tag;
@@ -468,14 +482,6 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
         global.add(tag);
         
         return tag;
-    }
-    
-    public static bool exists(string path) {
-        Tag? tag = global.fetch_by_name(path);
-        if (tag == null)
-            tag = global.restore_tag_from_holding_tank(path);
-        
-        return (tag != null);
     }
     
     public static Gee.Collection<Tag> get_terminal_tags(Gee.Collection<Tag> tags) {
@@ -503,7 +509,7 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
         
         Gee.ArrayList<Tag> result = new Gee.ArrayList<Tag>();
         foreach (string path in result_paths) {
-            if (Tag.exists(path)) {
+            if (Tag.global.exists(path)) {
                 result.add(Tag.for_path(path));
             } else {
                 foreach (Tag probed_tag in tags) {
@@ -563,13 +569,11 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
         return result;
     }
     
-    private void set_raw_flat_name(string name) {   
+    private void set_raw_flat_name(string name) {
         string? prepped_name = prep_tag_name(name);
 
         assert(prepped_name != null);
         assert(!prepped_name.has_prefix(Tag.PATH_SEPARATOR_STRING));
-        
-        assert(!Tag.global.exists(prepped_name));
         
         try {
             TagTable.get_instance().rename(row.tag_id, prepped_name);
@@ -632,7 +636,7 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
     public void flatten() {
         assert (get_hierarchical_parent() == null);
         
-        set_raw_flat_name(HierarchicalTagUtilities.hierarchical_to_flat(get_path()));
+        set_raw_flat_name(get_user_visible_name());
     }
     
     public void promote() {
@@ -661,6 +665,22 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
             parent_path += (Tag.PATH_SEPARATOR_STRING + components.get(i));
         
         return Tag.for_path(parent_path);
+    }
+    
+    public int get_attachment_count(MediaSource source) {
+        // if we don't contain the source, the attachment count is zero
+        if (!contains(source))
+            return 0;
+
+        // we ourselves contain the source, so that's one attachment
+        int result = 1;
+        
+        // check to see if our children contain the source
+        foreach (Tag child in get_hierarchical_children())
+            if (child.contains(source))
+                result++;
+        
+        return result;
     }
     
     /**
@@ -704,7 +724,7 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
             string path_candidate = prefix + candidate_name +
                 ((counter == 0) ? "" : (" " + counter.to_string()));
             
-            if (!Tag.exists(path_candidate))
+            if (!Tag.global.exists(path_candidate))
                 return path_candidate;
             
             counter++;
@@ -765,39 +785,7 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
         return new TagProxy(this);
     }
     
-    private static Tag reconstitute(int64 object_id, TagRow row) {
-        // if reconstituting a hierarchical tag, we have to do some special manipulations
-        if (row.name.has_prefix(Tag.PATH_SEPARATOR_STRING)) {
-            // it is possible that this tag has already been reconstituted when one of its children
-            // was reconstituted, so check for this case and return the already-reconstituted tag
-            if (Tag.exists(row.name)) {
-                return Tag.for_path(row.name);
-            }
-        
-        
-            Gee.List<string> parent_paths =
-                HierarchicalTagUtilities.enumerate_parent_paths(row.name);
-
-            if (parent_paths.size == 0) {
-                // if reconsituting a top-level hierarchical tag, flatten its path before
-                // reconstituting it
-                row.name = HierarchicalTagUtilities.hierarchical_to_flat(row.name);
-            } else if (parent_paths.size == 1) {
-                // if reconstituting a hierarchical tag with a top-level parent, it's parent may
-                // have been flattened so handle this case
-                string immediate_parent_path = parent_paths.get(0);
-                if (!Tag.exists(immediate_parent_path)) {
-                    string flat_immediate_path =
-                        HierarchicalTagUtilities.hierarchical_to_flat(immediate_parent_path);
-                    assert(Tag.exists(flat_immediate_path));
-                    Tag.for_path(flat_immediate_path).promote();
-                }
-            } else {
-                // no name transformation is necessary for general hierarchical tag paths
-                ;
-            }
-        }
-    
+    public static Tag reconstitute(int64 object_id, TagRow row) {   
         // fill in the row with the new TagID for this reconstituted tag        
         try {
             row.tag_id = TagTable.get_instance().create_from_row(row);
@@ -888,46 +876,57 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
         }
     }
     
-    public bool detach(MediaSource source) {
+    // Returns a list of Tags the MediaSource was detached from as a result of detaching it from
+    // this Tag.  (This Tag will always be in the list unless null is returned, indicating the
+    // MediaSource isn't present at all.)
+    public Gee.List<Tag>? detach(MediaSource source) {
         DataView? this_view = media_views.get_view_for_source(source);
         if (this_view == null)
-            return false;
-            
+            return null;
+        
+        Gee.List<Tag>? detached_from = new Gee.ArrayList<Tag>();
+        
         foreach (Tag child_tag in get_hierarchical_children()) {
             DataView? child_view = child_tag.media_views.get_view_for_source(source);
             if (child_view != null) {
                 child_tag.media_views.remove_marked(child_tag.media_views.mark(child_view));
+                detached_from.add(child_tag);
             }
         }
         
         media_views.remove_marked(media_views.mark(this_view));
+        detached_from.add(this);
         
-        return true;
+        return detached_from;
     }
     
-    public int detach_many(Gee.Collection<MediaSource> sources) {
-        int count = 0;
+    // Returns a map of Tags the MediaSource was detached from as a result of detaching it from
+    // this Tag.  (This Tag will always be in the list unless null is returned, indicating the
+    // MediaSource isn't present at all.)
+    public Gee.MultiMap<Tag, MediaSource>? detach_many(Gee.Collection<MediaSource> sources) {
+        Gee.MultiMap<Tag, MediaSource>? detached_from = new Gee.HashMultiMap<Tag, MediaSource>();
         
         Marker marker = media_views.start_marking();
         foreach (MediaSource source in sources) {
             DataView? view = media_views.get_view_for_source(source);
             if (view == null)
                 continue;
-
+            
             foreach (Tag child_tag in get_hierarchical_children()) {
                 DataView? child_view = child_tag.media_views.get_view_for_source(source);
                 if (child_view != null) {
                     child_tag.media_views.remove_marked(child_tag.media_views.mark(child_view));
+                    detached_from.set(child_tag, source);
                 }
             }
             
             marker.mark(view);
-            count++;
+            detached_from.set(this, source);
         }
         
         media_views.remove_marked(marker);
         
-        return count;
+        return (detached_from.size > 0) ? detached_from : null;
     }
     
     // Returns false if the name already exists or a bad name.
@@ -951,7 +950,7 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
                 new_path = Tag.PATH_SEPARATOR_STRING + new_path;
             }
             
-            if (Tag.global.exists(new_path))
+            if (Tag.global.exists(new_path, true))
                 return false;
 
             Gee.Collection<Tag> children = get_hierarchical_children();
@@ -974,7 +973,7 @@ public class Tag : DataSource, ContainerSource, Proxyable, Indexable {
             }
         } else {
             // if this is a flat tag, no problem -- just keep doing what we've always done
-            if (Tag.global.exists(new_name))
+            if (Tag.global.exists(new_name, true))
                 return false;
             
             set_raw_flat_name(new_name);

@@ -77,6 +77,9 @@ public class Sidebar.Tree : Gtk.TreeView {
     private bool mask_entry_selected_signal = false;
     private weak EntryWrapper? selected_wrapper = null;
     private Gtk.Menu? default_context_menu = null;
+    private bool is_internal_drag_in_progress = false;
+    private Sidebar.Entry? internal_drag_source_entry = null;
+    private Gtk.TreeRowReference? old_path_ref = null;
     
     public signal void entry_selected(Sidebar.SelectableEntry selectable);
     
@@ -147,12 +150,41 @@ public class Sidebar.Tree : Gtk.TreeView {
         icon_theme.changed.connect(on_theme_change);
         
         setup_default_context_menu();
+        
+        drag_begin.connect(on_drag_begin);
+        drag_end.connect(on_drag_end);
+        drag_motion.connect(on_drag_motion);
     }
     
     ~Tree() {
         text_renderer.editing_canceled.disconnect(on_editing_canceled);
         text_renderer.editing_started.disconnect(on_editing_started);
         icon_theme.changed.disconnect(on_theme_change);
+    }
+    
+    private void on_drag_begin(Gdk.DragContext ctx) {
+        is_internal_drag_in_progress = true;
+    }
+    
+    private void on_drag_end(Gdk.DragContext ctx) {
+        is_internal_drag_in_progress = false;
+        internal_drag_source_entry = null;
+    }
+    
+    private bool on_drag_motion (Gdk.DragContext context, int x, int y, uint time_) {
+        if (is_internal_drag_in_progress && internal_drag_source_entry == null) {
+            Gtk.TreePath? path;
+            Gtk.TreeViewDropPosition position;
+            get_dest_row_at_pos(x, y, out path, out position);
+            
+            if (path != null) {
+                EntryWrapper wrapper = get_wrapper_at_path(path);
+                if (wrapper != null)
+                    internal_drag_source_entry = wrapper.entry;
+            }
+        }
+        
+        return false;
     }
     
     private void setup_default_context_menu() {
@@ -834,24 +866,42 @@ public class Sidebar.Tree : Gtk.TreeView {
     }
     
     public override bool button_press_event(Gdk.EventButton event) {
+        Gtk.TreePath? path = get_path_from_event(event);
+
         if (event.button == 3 && event.type == Gdk.EventType.BUTTON_PRESS) {
             // single right click
-            Gtk.TreePath? path = get_path_from_event(event);
             if (path != null)
                 popup_context_menu(path, event);
             else
                 popup_default_context_menu(event);
         } else if (event.button == 1 && event.type == Gdk.EventType.2BUTTON_PRESS) {
             // double left click
-            Gtk.TreePath? path = get_path_from_event(event);
             if (path != null) {
                 toggle_branch_expansion(path, false);
                 
                 if (can_rename_path(path))
                     return false;
             }
+        } else if (event.button == 1 && event.type == Gdk.EventType.BUTTON_PRESS) {
+            // Is this a click on an already-highlighted tree item?
+            if ((old_path_ref != null) && (old_path_ref.get_path() != null)
+                && (old_path_ref.get_path().compare(path) == 0)) {
+                // yes, don't allow single-click editing, but 
+                // pass the event on for dragging.
+                text_renderer.editable = false;
+                return base.button_press_event(event);
+            }
+            
+            // Got click on different tree item, make sure it is editable
+            // if it needs to be.
+            if (get_wrapper_at_path(path).entry is Sidebar.RenameableEntry) {
+                text_renderer.editable = true;
+            }
+            
+            // Remember what tree item is highlighted for next time.
+            old_path_ref = (path != null) ?  new Gtk.TreeRowReference(store, path) : null;
         }
-        
+
         return base.button_press_event(event);
     }
     
@@ -926,17 +976,29 @@ public class Sidebar.Tree : Gtk.TreeView {
 
     public override void drag_data_get(Gdk.DragContext context, Gtk.SelectionData selection_data,
         uint info, uint time) {
-        Gtk.TreePath? selected_path = get_selected_path();
-        if (selected_path == null)
-            return;
-
-        EntryWrapper? wrapper = get_wrapper_at_path(selected_path);
-        if (wrapper == null)
-            return;
+        InternalDragSourceEntry? drag_source = null;
         
-        InternalDragSourceEntry? drag_source = wrapper.entry as InternalDragSourceEntry;
-        if (drag_source == null)
-            return;
+        if (internal_drag_source_entry != null) {
+            Sidebar.SelectableEntry selectable =
+                internal_drag_source_entry as Sidebar.SelectableEntry;
+            if (selectable == null) {
+                drag_source = internal_drag_source_entry as InternalDragSourceEntry;
+            }
+        }
+        
+        if (drag_source == null) {
+            Gtk.TreePath? selected_path = get_selected_path();
+            if (selected_path == null)
+                return;
+
+            EntryWrapper? wrapper = get_wrapper_at_path(selected_path);
+            if (wrapper == null)
+                return;
+            
+            drag_source = wrapper.entry as InternalDragSourceEntry;
+            if (drag_source == null)
+                return;
+        }
         
         drag_source.prepare_selection_data(selection_data);
     }

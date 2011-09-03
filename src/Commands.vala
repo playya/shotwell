@@ -128,6 +128,7 @@ public abstract class SingleDataSourceCommand : PageCommand {
 
 public abstract class SimpleProxyableCommand : PageCommand {
     private SourceProxy proxy;
+    private Gee.HashSet<SourceProxy> proxies = new Gee.HashSet<SourceProxy>();
     
     public SimpleProxyableCommand(Proxyable proxyable, string name, string explanation) {
         base (name, explanation);
@@ -138,6 +139,7 @@ public abstract class SimpleProxyableCommand : PageCommand {
     
     ~SimpleProxyableCommand() {
         proxy.broken.disconnect(on_proxy_broken);
+        clear_added_proxies();
     }
     
     public override void execute() {
@@ -152,7 +154,28 @@ public abstract class SimpleProxyableCommand : PageCommand {
     
     protected abstract void undo_on_source(DataSource source);
     
+    // If the Command deals with other Proxyables during processing, it can add them here and the
+    // SimpleProxyableCommand will deal with created a SourceProxy and if it signals it's broken.
+    // Note that these cannot be removed programatically, but only cleared en masse; it's expected
+    // this is fine for the nature of a Command.
+    protected void add_proxyables(Gee.Collection<Proxyable> proxyables) {
+        foreach (Proxyable proxyable in proxyables) {
+            SourceProxy added_proxy = proxyable.get_proxy();
+            added_proxy.broken.connect(on_proxy_broken);
+            proxies.add(added_proxy);
+        }
+    }
+    
+    // See add_proxyables() for a note on use.
+    protected void clear_added_proxies() {
+        foreach (SourceProxy added_proxy in proxies)
+            added_proxy.broken.disconnect(on_proxy_broken);
+        
+        proxies.clear();
+    }
+    
     private void on_proxy_broken() {
+        debug("on_proxy_broken");
         get_command_manager().reset();
     }
 }
@@ -1086,6 +1109,7 @@ public class SetRatingCommand : MultipleDataSourceCommand {
 
 public class SetRawDeveloperCommand : MultipleDataSourceCommand {
     private Gee.HashMap<Photo, RawDeveloper> last_developer_map;
+    private Gee.HashMap<Photo, PhotoTransformationState> last_transformation_map;
     private RawDeveloper new_developer;
 
     public SetRawDeveloperCommand(Gee.Iterable<DataView> iter, RawDeveloper developer) {
@@ -1097,11 +1121,14 @@ public class SetRawDeveloperCommand : MultipleDataSourceCommand {
     
     private void save_source_states(Gee.Iterable<DataView> iter) {
         last_developer_map = new Gee.HashMap<Photo, RawDeveloper>();
+        last_transformation_map = new Gee.HashMap<Photo, PhotoTransformationState>();
         
         foreach (DataView view in iter) {
             Photo? photo = view.get_source() as Photo;
-            if (is_raw_photo(photo))
+            if (is_raw_photo(photo)) {
                 last_developer_map[photo] = photo.get_raw_developer();
+                last_transformation_map[photo] = photo.save_transformation_state();
+            }
         }
     }
     
@@ -1125,8 +1152,10 @@ public class SetRawDeveloperCommand : MultipleDataSourceCommand {
     
     public override void undo_on_source(DataSource source) {
         Photo? photo = source as Photo;
-        if (is_raw_photo(photo))
+        if (is_raw_photo(photo)) {
             photo.set_raw_developer(last_developer_map[photo]);
+            photo.load_transformation_state(last_transformation_map[photo]);
+        }
     }
     
     private bool is_raw_photo(Photo? photo) {
@@ -1376,23 +1405,22 @@ public class DeleteTagCommand : SimpleProxyableCommand {
     protected override void execute_on_source(DataSource source) {
         Tag tag = (Tag) source;
         
-        Gee.List<Tag>? recursive_victims = tag.get_hierarchical_children();
-        
-        // if this tag has no children just destroy it and do a short-circuit return
-        if (recursive_victims.size == 0) {
-            Tag.global.destroy_marked(Tag.global.mark(source), false);
-            return;
+        // process children first, if any
+        Gee.List<Tag> recursive_victims = tag.get_hierarchical_children();
+        if (recursive_victims.size > 0) {
+            // save proxies for these Tags and then delete, in order .. can't use mark_many() or
+            // add_proxyables() here because they make no guarantee of order
+            recursive_victim_proxies = new Gee.ArrayList<SourceProxy>();
+            foreach (Tag victim in recursive_victims) {
+                SourceProxy proxy = victim.get_proxy();
+                proxy.broken.connect(on_proxy_broken);
+                recursive_victim_proxies.add(proxy);
+                
+                Tag.global.destroy_marked(Tag.global.mark(victim), false);
+            }
         }
         
-        // okay, this tag has children, so they need to be proxied and deleted as well
-        recursive_victim_proxies = new Gee.ArrayList<SourceProxy>();
-        
-        foreach (Tag victim in recursive_victims) {
-            recursive_victim_proxies.add(victim.get_proxy());
-
-            Tag.global.destroy_marked(Tag.global.mark(victim), false);
-        }
-        
+        // destroy parent tag, which is already proxied
         Tag.global.destroy_marked(Tag.global.mark(source), false);
     }
     
@@ -1400,13 +1428,24 @@ public class DeleteTagCommand : SimpleProxyableCommand {
         // merely instantiating the Tag will rehydrate it ... should always work, because the 
         // undo stack is cleared if the proxy ever breaks
         assert(source is Tag);
-               
+        
+        // rehydrate the children, in reverse order
         if (recursive_victim_proxies != null) {
             for (int i = recursive_victim_proxies.size - 1; i >= 0; i--) {
-                DataSource victim_source = recursive_victim_proxies.get(i).get_source();
+                SourceProxy proxy = recursive_victim_proxies.get(i);
+                
+                DataSource victim_source = proxy.get_source();
                 assert(victim_source is Tag);
+                
+                proxy.broken.disconnect(on_proxy_broken);
             }
+            
+            recursive_victim_proxies = null;
         }
+    }
+    
+    private void on_proxy_broken() {
+        get_command_manager().reset();
     }
 }
 
@@ -1434,46 +1473,49 @@ public class NewChildTagCommand : SimpleProxyableCommand {
 }
 
 public class NewRootTagCommand : PageCommand {
-    Tag? created = null;
+    SourceProxy? created_proxy = null;
     
     public NewRootTagCommand() {
         base (_("Create Tag"), "");
     }
     
     protected override void execute() {
-        created = Tag.create_new_root();
-        SourceProxy tag_proxy = created.get_proxy();
-        tag_proxy.broken.connect(on_proxy_broken);
+        if (created_proxy == null)
+            created_proxy = Tag.create_new_root().get_proxy();
+        else
+            created_proxy.get_source();
     }
     
     protected override void undo() {
-        Tag.global.destroy_marked(Tag.global.mark(created), true);
+        Tag.global.destroy_marked(Tag.global.mark(created_proxy.get_source()), true);
     }
     
     public Tag get_created_tag() {
-        assert(created != null);
-        
-        return created;
-    }
-    
-    private void on_proxy_broken() {
-        get_command_manager().reset();
+        return (Tag) created_proxy.get_source();
     }
 }
 
 public class ReparentTagCommand : PageCommand {
-    string basename;
     string from_path;
     string to_path;
+    string? to_path_parent_path;
+    Gee.List<SourceProxy>? src_before_state = null;
+    Gee.List<SourceProxy>? dest_before_state = null;
+    Gee.List<SourceProxy>? after_state = null;
+    Gee.HashSet<MediaSource> sources_in_play = new Gee.HashSet<MediaSource>();
+    Gee.Map<Tag, Gee.Set<MediaSource>> dest_parent_attachments = null;
+    Gee.Map<Tag, Gee.Set<MediaSource>> src_parent_detachments = null;
+    Gee.Map<string, Gee.Set<MediaSource>> in_play_child_structure = null;
+    Gee.Map<string, Gee.Set<MediaSource>> existing_dest_child_structure = null;
     
     public ReparentTagCommand(Tag tag, string new_parent_path) {
         base (_("Move Tag \"%s\"").printf(tag.get_user_visible_name()), "");
 
-        this.basename = tag.get_user_visible_name();
         this.from_path = tag.get_path();
 
         bool has_children = (tag.get_hierarchical_children().size > 0);
-
+        string basename = tag.get_user_visible_name();
+        
         if (new_parent_path == Tag.PATH_SEPARATOR_STRING)
             this.to_path = (has_children) ? (Tag.PATH_SEPARATOR_STRING + basename) : basename;
         else if (new_parent_path.has_prefix(Tag.PATH_SEPARATOR_STRING))
@@ -1481,65 +1523,179 @@ public class ReparentTagCommand : PageCommand {
         else
             this.to_path = Tag.PATH_SEPARATOR_STRING + new_parent_path + Tag.PATH_SEPARATOR_STRING +
                 basename;
+
+        sources_in_play.add_all(tag.get_sources());
+        
+        LibraryPhoto.global.items_destroyed.connect(on_items_destroyed);
+        Video.global.items_destroyed.connect(on_items_destroyed);
     }
     
-    private void do_move(string from, string to) {
-        // make sure a tag corresponding to the from path exists -- this should always be true,
-        // given the way the constructor for this class works, but it's a sanity check
-        Tag? from_tag = null;
-        if (!Tag.exists(from))
-            error("do_move: can't move from tag with path '%s': tag doesn't exist.", from);
-        from_tag = Tag.for_path(from);
+    ~ReparentTagCommand() {
+        LibraryPhoto.global.items_destroyed.disconnect(on_items_destroyed);
+        Video.global.items_destroyed.disconnect(on_items_destroyed);
+    }
+    
+    private void on_items_destroyed(Gee.Collection<DataSource> destroyed) {
+        foreach (DataSource source in destroyed) {
+            if (sources_in_play.contains((MediaSource) source))
+                get_command_manager().reset();
+        }
+    }
+    
+    private Gee.Map<string, Gee.Set<MediaSource>> get_child_structure_at(string client_path) {
+        string path = HierarchicalTagUtilities.get_root_path_form(client_path);
+
+        Gee.Map<string, Gee.Set<MediaSource>> result =
+            new Gee.HashMap<string, Gee.Set<MediaSource>>();
+
+        assert(Tag.global.exists(path));
+        Tag tag = Tag.for_path(path);
         
-        // if the from tag has any children they need to be moved recursively with the from tag,
-        // so enumerate them
-        Gee.List<Tag> from_children = new Gee.ArrayList<Tag>();
-        from_children.add_all(from_tag.get_hierarchical_children());
-        
-        // make a list of all the sources in the from tag
-        Gee.Set<MediaSource> from_sources = new Gee.HashSet<MediaSource>();
-        from_sources.add_all(from_tag.get_sources());
-        
-        // keep track of which sources belong to which children since we need to recreate the
-        // child structure exactly
-        Gee.Map<string, Gee.Set<MediaSource>> child_structure =
-            new Gee.TreeMap<string, Gee.Set<MediaSource>>();
-        
-        // loop through sources and detach them
-        foreach (MediaSource source in from_sources) {
-            // detach the current source from all child tags of the from tag
-            foreach (Tag child in from_children) {
-                string child_subpath = child.get_path().replace(from + Tag.PATH_SEPARATOR_STRING,
-                    "");
-                if (!child_structure.has_key(child_subpath))
-                    child_structure.set(child_subpath, new Gee.HashSet<MediaSource>());
-                
-                if (child.contains(source)) {
-                    child_structure.get(child_subpath).add(source);
-                }
-            }
-            
-            // detach the current source from the from tag itself
-            from_tag.detach(source);
-            
-            // detach the current source from all of the parent tags of the from tag
-            Tag? current_parent = from_tag.get_hierarchical_parent();
-            while (current_parent != null) {
-                current_parent.detach(source);
-                
-                current_parent = current_parent.get_hierarchical_parent();
-            }
+        string path_prefix = tag.get_path() + Tag.PATH_SEPARATOR_STRING;
+        foreach (Tag t in tag.get_hierarchical_children()) {
+            string child_subpath = t.get_path().replace(path_prefix, "");
+
+            result.set(child_subpath, new Gee.HashSet<MediaSource>());
+            result.get(child_subpath).add_all(t.get_sources());
         }
         
+        return result;
+    }
+    
+    private void restore_child_attachments_at(string path,
+        Gee.Map<string, Gee.Set<MediaSource>> child_structure) {        
+        
+        assert(Tag.global.exists(path));
+        Tag tag = Tag.for_path(path);
+        
+        foreach (string child_subpath in child_structure.keys) {
+            string child_path = tag.get_path() + Tag.PATH_SEPARATOR_STRING + child_subpath;
+
+            if (!tag.get_path().has_prefix(Tag.PATH_SEPARATOR_STRING)) {
+                child_path = Tag.PATH_SEPARATOR_STRING + child_path;
+                tag.promote();
+            }
+            
+            assert(Tag.global.exists(child_path));
+            
+            foreach (MediaSource s in child_structure.get(child_subpath))
+                Tag.for_path(child_path).attach(s);
+        }
+    }
+    
+    private void reattach_in_play_sources_at(string path) {
+        assert(Tag.global.exists(path));
+        
+        Tag tag = Tag.for_path(path);
+        
+        foreach (MediaSource s in sources_in_play)
+            tag.attach(s);
+    }
+    
+    private void save_before_state() {
+        assert(src_before_state == null);
+        assert(dest_before_state == null);
+        
+        src_before_state = new Gee.ArrayList<SourceProxy>();
+
+        // capture the child structure of the from tag
+        assert(in_play_child_structure == null);
+        in_play_child_structure = get_child_structure_at(from_path);
+        
+        // capture the child structure of the parent of the to tag, if the to tag has a parent
+        Gee.List<string> parent_paths = HierarchicalTagUtilities.enumerate_parent_paths(to_path);
+        if (parent_paths.size > 0)
+            to_path_parent_path = parent_paths.get(parent_paths.size - 1);
+        
+        if (to_path_parent_path != null) {
+            assert(existing_dest_child_structure == null);
+            existing_dest_child_structure = get_child_structure_at(to_path_parent_path);
+        }
+        
+        // save the state of the from tag
+        assert(Tag.global.exists(from_path));
+        Tag from_tag = Tag.for_path(from_path);
+        src_before_state.add(from_tag.get_proxy());
+        
+        // save the state of the to tag's parent
+        if (to_path_parent_path != null) {
+            to_path_parent_path = HierarchicalTagUtilities.get_root_path_form(to_path_parent_path);
+            assert(Tag.global.exists(to_path_parent_path));
+            dest_before_state = new Gee.ArrayList<SourceProxy>();
+            dest_before_state.add(Tag.for_path(to_path_parent_path).get_proxy());
+        }
+
+        // save the state of the children of the from tag in order from most basic to most derived
+        Gee.List<Tag> from_children = from_tag.get_hierarchical_children();
+        for (int i = from_children.size - 1; i >= 0; i--)
+            src_before_state.add(from_children.get(i).get_proxy());
+
+        // save the state of the children of the to tag's parent in order from most basic to most
+        // derived
+        if (to_path_parent_path != null) {
+            Gee.List<Tag> to_children = Tag.for_path(to_path_parent_path).get_hierarchical_children();
+            for (int i = to_children.size - 1; i >= 0; i--)
+                dest_before_state.add(to_children.get(i).get_proxy());
+        }
+            
+    }
+    
+    private void restore_before_state() {
+        assert(src_before_state != null);
+        
+        for (int i = 0; i < src_before_state.size; i++)
+            src_before_state.get(i).get_source();
+
+        to_path_parent_path = HierarchicalTagUtilities.get_root_path_form(to_path_parent_path);
+
+        for (int i = 0; i < dest_before_state.size; i++)
+            dest_before_state.get(i).get_source();
+
+        if (to_path_parent_path != null && existing_dest_child_structure != null) {
+            assert(Tag.global.exists(to_path_parent_path));
+            Tag t = Tag.for_path(to_path_parent_path);
+
+            Gee.List<Tag> kids = t.get_hierarchical_children();
+            foreach (Tag kidtag in kids)
+                kidtag.detach_many(kidtag.get_sources());
+
+            restore_child_attachments_at(to_path_parent_path, existing_dest_child_structure);
+        }
+    }
+    
+    private void save_after_state() {
+        assert(after_state == null);
+        
+        after_state = new Gee.ArrayList<SourceProxy>();
+        
+        // save the state of the to tag
+        assert(Tag.global.exists(to_path));
+        Tag to_tag = Tag.for_path(to_path);
+        after_state.add(to_tag.get_proxy());
+        
+        // save the state of the children of the to tag in order from most basic to most derived
+        Gee.List<Tag> to_children = to_tag.get_hierarchical_children();
+        for (int i = to_children.size - 1; i >= 0; i--)
+            after_state.add(to_children.get(i).get_proxy());
+    }
+    
+    private void restore_after_state() {
+        assert(after_state != null);
+        
+        for (int i = 0; i < after_state.size; i++)
+            after_state.get(i).get_source();
+    }
+
+    private void prepare_parent(string path) {
         // find our new parent tag (if one exists) and promote it
         Tag? new_parent = null;
-        if (to.has_prefix(Tag.PATH_SEPARATOR_STRING)) {
-            Gee.List<string> parent_paths = HierarchicalTagUtilities.enumerate_parent_paths(to);
+        if (path.has_prefix(Tag.PATH_SEPARATOR_STRING)) {
+            Gee.List<string> parent_paths = HierarchicalTagUtilities.enumerate_parent_paths(path);
             if (parent_paths.size > 0) {
                 string immediate_parent_path = parent_paths.get(parent_paths.size - 1);
-                if (Tag.exists(immediate_parent_path))
+                if (Tag.global.exists(immediate_parent_path))
                     new_parent = Tag.for_path(immediate_parent_path);
-                else if (Tag.exists(immediate_parent_path.substring(1)))
+                else if (Tag.global.exists(immediate_parent_path.substring(1)))
                     new_parent = Tag.for_path(immediate_parent_path.substring(1));
                 else
                     assert_not_reached();
@@ -1547,56 +1703,170 @@ public class ReparentTagCommand : PageCommand {
         }    
         if (new_parent != null)
             new_parent.promote();
+    }
+    
+    private void do_source_parent_detachments() {
+        assert(Tag.global.exists(from_path));
+        Tag from_tag = Tag.for_path(from_path);
+        
+        // see if this copy operation will detach any media items from the source tag's parents
+        if (src_parent_detachments == null) {
+            src_parent_detachments = new Gee.HashMap<Tag, Gee.Set<MediaSource>>();
+            foreach (MediaSource source in from_tag.get_sources()) {           
+                Tag? current_parent = from_tag.get_hierarchical_parent();
+                int running_attach_count = from_tag.get_attachment_count(source) + 1;
+                while (current_parent != null) {
+                    if (!src_parent_detachments.has_key(current_parent))
+                        src_parent_detachments.set(current_parent, new Gee.HashSet<MediaSource>());
 
-        // get (or create) a tag for the destination path and attach all of the sources to it;
-        // also attach all of the sources to the parents of the destination tag, if any
+                    int curr_parent_attach_count = current_parent.get_attachment_count(source);
+                    
+                    assert (curr_parent_attach_count >= running_attach_count);
+                    
+                    // if this parent tag has no other child tags that the current media item is
+                    // attached to
+                    if (curr_parent_attach_count == running_attach_count)
+                        src_parent_detachments.get(current_parent).add(source);
+
+                    running_attach_count++;
+                    current_parent = current_parent.get_hierarchical_parent();
+                }
+            }
+        }
+        
+        // perform collected detachments
+        foreach (Tag p in src_parent_detachments.keys)
+            foreach (MediaSource s in src_parent_detachments.get(p))
+                p.detach(s);
+    }
+    
+    private void do_source_parent_reattachments() {
+        assert(src_parent_detachments != null);
+        
+        foreach (Tag p in src_parent_detachments.keys)
+            foreach (MediaSource s in src_parent_detachments.get(p))
+                p.attach(s);
+    }
+    
+    private void do_destination_parent_detachments() {
+        assert(dest_parent_attachments != null);
+        
+        foreach (Tag p in dest_parent_attachments.keys)
+            foreach (MediaSource s in dest_parent_attachments.get(p))
+                p.detach(s);
+    }
+    
+    private void do_destination_parent_reattachments() {
+        assert(dest_parent_attachments != null);
+        
+        foreach (Tag p in dest_parent_attachments.keys)
+            foreach (MediaSource s in dest_parent_attachments.get(p))
+                p.attach(s);
+    }
+    
+    private void copy_subtree(string from, string to) {
+        assert(Tag.global.exists(from));
+        Tag from_tag = Tag.for_path(from);
+        
+        // get (or create) a tag for the destination path
         Tag to_tag = Tag.for_path(to);
-        foreach (MediaSource current_from_source in from_sources) {
-            to_tag.attach(current_from_source);
-            
-            Tag? parent = to_tag.get_hierarchical_parent();
-            while (parent != null) {
-                parent.attach(current_from_source);
-            
-                parent = parent.get_hierarchical_parent();
-            }
-        }
+        
+        // see if this copy operation will attach any new media items to the destination's parents,
+        // if so, record them for later undo/redo
+        dest_parent_attachments = new Gee.HashMap<Tag, Gee.Set<MediaSource>>();
+        foreach (MediaSource source in from_tag.get_sources()) {            
+            Tag? current_parent = to_tag.get_hierarchical_parent();
+            while (current_parent != null) {
+                if (!dest_parent_attachments.has_key(current_parent))
+                    dest_parent_attachments.set(current_parent, new Gee.HashSet<MediaSource>());
 
-        // create our child paths, if any, and attach their sources
-        foreach (string curr_child_subpath in child_structure.keys) {
-            string curr_child_path = to_tag.get_path() + Tag.PATH_SEPARATOR_STRING +
-                curr_child_subpath;
-            Tag curr_child_tag = Tag.for_path(curr_child_path);
-            foreach (MediaSource src_in_child in child_structure.get(curr_child_subpath)) {
-                curr_child_tag.attach(src_in_child);
+                if (!current_parent.contains(source))
+                    dest_parent_attachments.get(current_parent).add(source);
+            
+                current_parent = current_parent.get_hierarchical_parent();
             }
         }
         
-        // cleanup our old children
-        Tag.global.destroy_marked(Tag.global.mark_many(from_children), true);
-        
-        // cleanup our old tag -- keep in mind that when our children were removed, we
-        // may have been flattened
-        if (Tag.exists(from)) {
-            Tag.global.destroy_marked(Tag.global.mark(Tag.for_path(from)), true);
+        foreach (MediaSource source in from_tag.get_sources())
+            to_tag.attach(source);
+
+        // loop through the children of the from tag in order from most basic to most derived,
+        // creating corresponding child tags on the to tag and attaching corresponding sources
+        Gee.List<Tag> from_children = from_tag.get_hierarchical_children();
+        for (int i = from_children.size - 1; i >= 0; i--) {
+            Tag from_child = from_children.get(i);
             
-            return;
+            string child_subpath = from_child.get_path().replace(from + Tag.PATH_SEPARATOR_STRING,
+                "");
+
+            Tag to_child = Tag.for_path(to_tag.get_path() + Tag.PATH_SEPARATOR_STRING +
+                child_subpath);
+
+            foreach (MediaSource source in from_child.get_sources())
+                to_child.attach(source);
         }
-        if (HierarchicalTagUtilities.enumerate_path_components(from).size == 1) {
-            string from_flat = HierarchicalTagUtilities.hierarchical_to_flat(from);
-            if (Tag.exists(from_flat))
-                Tag.global.destroy_marked(Tag.global.mark(Tag.for_path(from_flat)), true);
-                
-            return;
-        }
+    }
+    
+    private void destroy_subtree(string victim_path) {
+        assert(Tag.global.exists(victim_path));
+        Tag victim = Tag.for_path(victim_path);
+
+        // destroy the children of the victim in order from most derived to most basic
+        Gee.List<Tag> victim_children = victim.get_hierarchical_children();
+        for (int i = 0; i < victim_children.size; i++)
+            Tag.global.destroy_marked(Tag.global.mark(victim_children.get(i)), true);
+        
+        // destroy the victim itself
+        Tag.global.destroy_marked(Tag.global.mark(victim), true);
     }
     
     public override void execute() {
-        do_move(from_path, to_path);
+        if (after_state == null) {
+            save_before_state();
+            
+            prepare_parent(to_path);
+
+            copy_subtree(from_path, to_path);
+
+            save_after_state();
+
+            do_source_parent_detachments();
+
+            destroy_subtree(from_path);
+        } else {
+            prepare_parent(to_path);
+            
+            restore_after_state();
+            
+            restore_child_attachments_at(to_path, in_play_child_structure);
+            reattach_in_play_sources_at(to_path);
+
+            do_source_parent_detachments();
+            do_destination_parent_reattachments();
+
+            destroy_subtree(from_path);
+        }
     }
     
     public override void undo() {
-        do_move(to_path, from_path);
+        assert(src_before_state != null);
+        
+        prepare_parent(from_path);
+
+        destroy_subtree(to_path);
+
+        restore_before_state();
+        
+        restore_child_attachments_at(from_path, in_play_child_structure);
+        reattach_in_play_sources_at(from_path);
+        
+        do_source_parent_reattachments();
+        do_destination_parent_detachments();
+        
+        HierarchicalTagUtilities.cleanup_root_path(to_path);
+        HierarchicalTagUtilities.cleanup_root_path(from_path);
+        if (to_path_parent_path != null)
+            HierarchicalTagUtilities.cleanup_root_path(to_path_parent_path);
     }
 }
 
@@ -1631,7 +1901,7 @@ public class ModifyTagsCommand : SingleDataSourceCommand {
         }
         
         foreach (string path in new_paths) {
-            assert(Tag.exists(path));
+            assert(Tag.global.exists(path));
 
             SourceProxy proxy = Tag.for_path(path).get_proxy();
             to_add.add(proxy);
@@ -1671,6 +1941,7 @@ public class ModifyTagsCommand : SingleDataSourceCommand {
 public class TagUntagPhotosCommand : SimpleProxyableCommand {
     private Gee.Collection<MediaSource> sources;
     private bool attach;
+    private Gee.MultiMap<Tag, MediaSource>? detached_from = null;
     
     public TagUntagPhotosCommand(Tag tag, Gee.Collection<MediaSource> sources, int count, bool attach) {
         base (tag,
@@ -1685,26 +1956,54 @@ public class TagUntagPhotosCommand : SimpleProxyableCommand {
         Video.global.item_destroyed.connect(on_source_destroyed);
     }
     
-    ~TagPhotosCommand() {
+    ~TagUntagPhotosCommand() {
         LibraryPhoto.global.item_destroyed.disconnect(on_source_destroyed);
         Video.global.item_destroyed.disconnect(on_source_destroyed);
     }
     
     public override void execute_on_source(DataSource source) {
         if (attach)
-            ((Tag) source).attach_many(sources);
+            do_attach((Tag) source);
         else
-            ((Tag) source).detach_many(sources);
+            do_detach((Tag) source);
     }
     
     public override void undo_on_source(DataSource source) {
         if (attach)
-            ((Tag) source).detach_many(sources);
+            do_detach((Tag) source);
         else
-            ((Tag) source).attach_many(sources);
+            do_attach((Tag) source);
+    }
+    
+    private void do_attach(Tag tag) {
+        // if not attaching previously detached Tags, attach and done
+        if (detached_from == null) {
+            tag.attach_many(sources);
+            
+            return;
+        }
+        
+        // reattach
+        foreach (Tag detached_tag in detached_from.get_all_keys())
+            detached_tag.attach_many(detached_from.get(detached_tag));
+        
+        detached_from = null;
+        clear_added_proxies();
+    }
+    
+    private void do_detach(Tag tag) {
+        // detaching a MediaSource from a Tag may result in the MediaSource being detached from
+        // many tags (due to heirarchical tagging), so save the MediaSources for each detached
+        // Tag for reversing the process
+        detached_from = tag.detach_many(sources);
+        
+        // since the "master" Tag (supplied in the ctor) is not necessarily the only one being
+        // saved, add proxies for all of the other ones as well
+        add_proxyables(detached_from.get_keys());
     }
     
     private void on_source_destroyed(DataSource source) {
+        debug("on_source_destroyed: %s", source.to_string());
         if (sources.contains((MediaSource) source))
             get_command_manager().reset();
     }
