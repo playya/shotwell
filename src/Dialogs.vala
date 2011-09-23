@@ -480,15 +480,17 @@ public class QuestionParams {
 
 public bool import_has_photos(Gee.Collection<BatchImportResult> import_collection) {
     foreach (BatchImportResult current_result in import_collection) {
-        if (PhotoFileFormat.get_by_file_extension(current_result.file) != PhotoFileFormat.UNKNOWN)
+        if (current_result.file != null
+            && PhotoFileFormat.get_by_file_extension(current_result.file) != PhotoFileFormat.UNKNOWN) {
             return true;
+        }
     }
     return false;
 }
 
 public bool import_has_videos(Gee.Collection<BatchImportResult> import_collection) {
     foreach (BatchImportResult current_result in import_collection) {
-        if (VideoReader.is_supported_video_file(current_result.file))
+        if (current_result.file != null && VideoReader.is_supported_video_file(current_result.file))
             return true;
     }
     return false;
@@ -1154,13 +1156,18 @@ public class ProgressDialog : Gtk.Window {
         if ((last_count == uint64.MAX) || (count - last_count) >= update_every) {
             set_percentage((double) count / (double) total);
             last_count = count;
-            
-            // TODO: get rid of this.  non-trivial, as some progress-monitor operations are blocking
-            // and need to allow the event loop to spin
-            spin_event_loop();
         }
         
-        return (cancellable != null) ? !cancellable.is_cancelled() : true;
+        bool keep_going = (cancellable != null) ? !cancellable.is_cancelled() : true;
+        
+        // TODO: get rid of this.  non-trivial, as some progress-monitor operations are blocking
+        // and need to allow the event loop to spin
+        //
+        // Important: Since it's possible the progress dialog might be destroyed inside this call,
+        // avoid referring to "this" afterwards at all costs (in case all refs have been dropped)
+        spin_event_loop();
+        
+        return keep_going;
     }
     
     public void close() {

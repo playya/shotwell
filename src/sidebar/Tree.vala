@@ -248,6 +248,9 @@ public class Sidebar.Tree : Gtk.TreeView {
     // Note that this method will result in the "entry-selected" signal to fire if mask_signal
     // is set to false.
     public bool place_cursor(Sidebar.Entry entry, bool mask_signal) {
+        if (!expand_to_entry(entry))
+            return false;
+        
         EntryWrapper? wrapper = get_wrapper(entry);
         if (wrapper == null)
             return false;
@@ -894,7 +897,7 @@ public class Sidebar.Tree : Gtk.TreeView {
             
             // Got click on different tree item, make sure it is editable
             // if it needs to be.
-            if (get_wrapper_at_path(path).entry is Sidebar.RenameableEntry) {
+            if (path != null && get_wrapper_at_path(path).entry is Sidebar.RenameableEntry) {
                 text_renderer.editable = true;
             }
             

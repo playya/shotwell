@@ -1503,10 +1503,12 @@ public class ReparentTagCommand : PageCommand {
     Gee.List<SourceProxy>? dest_before_state = null;
     Gee.List<SourceProxy>? after_state = null;
     Gee.HashSet<MediaSource> sources_in_play = new Gee.HashSet<MediaSource>();
-    Gee.Map<Tag, Gee.Set<MediaSource>> dest_parent_attachments = null;
-    Gee.Map<Tag, Gee.Set<MediaSource>> src_parent_detachments = null;
+    Gee.Map<string, Gee.Set<MediaSource>> dest_parent_attachments = null;
+    Gee.Map<string, Gee.Set<MediaSource>> src_parent_detachments = null;
     Gee.Map<string, Gee.Set<MediaSource>> in_play_child_structure = null;
     Gee.Map<string, Gee.Set<MediaSource>> existing_dest_child_structure = null;
+    Gee.Set<MediaSource>? existing_dest_membership = null;
+    bool to_path_exists = false;
     
     public ReparentTagCommand(Tag tag, string new_parent_path) {
         base (_("Move Tag \"%s\"").printf(tag.get_user_visible_name()), "");
@@ -1523,6 +1525,13 @@ public class ReparentTagCommand : PageCommand {
         else
             this.to_path = Tag.PATH_SEPARATOR_STRING + new_parent_path + Tag.PATH_SEPARATOR_STRING +
                 basename;
+        
+        string? new_to_path = HierarchicalTagUtilities.get_root_path_form(to_path);
+        if (new_to_path != null)
+            this.to_path = new_to_path;
+        
+        if (Tag.global.exists(this.to_path))
+            to_path_exists = true;
 
         sources_in_play.add_all(tag.get_sources());
         
@@ -1543,12 +1552,15 @@ public class ReparentTagCommand : PageCommand {
     }
     
     private Gee.Map<string, Gee.Set<MediaSource>> get_child_structure_at(string client_path) {
-        string path = HierarchicalTagUtilities.get_root_path_form(client_path);
+        string? path = HierarchicalTagUtilities.get_root_path_form(client_path);
+        path = (path != null) ? path : client_path;
 
         Gee.Map<string, Gee.Set<MediaSource>> result =
             new Gee.HashMap<string, Gee.Set<MediaSource>>();
 
-        assert(Tag.global.exists(path));
+        if (!Tag.global.exists(path))
+            return result;
+            
         Tag tag = Tag.for_path(path);
         
         string path_prefix = tag.get_path() + Tag.PATH_SEPARATOR_STRING;
@@ -1562,8 +1574,11 @@ public class ReparentTagCommand : PageCommand {
         return result;
     }
     
-    private void restore_child_attachments_at(string path,
-        Gee.Map<string, Gee.Set<MediaSource>> child_structure) {        
+    private void restore_child_attachments_at(string client_path,
+        Gee.Map<string, Gee.Set<MediaSource>> child_structure) {
+        
+        string? new_path = HierarchicalTagUtilities.get_root_path_form(client_path);
+        string path = (new_path != null) ? new_path : client_path;
         
         assert(Tag.global.exists(path));
         Tag tag = Tag.for_path(path);
@@ -1572,8 +1587,8 @@ public class ReparentTagCommand : PageCommand {
             string child_path = tag.get_path() + Tag.PATH_SEPARATOR_STRING + child_subpath;
 
             if (!tag.get_path().has_prefix(Tag.PATH_SEPARATOR_STRING)) {
-                child_path = Tag.PATH_SEPARATOR_STRING + child_path;
                 tag.promote();
+                child_path = tag.get_path() + Tag.PATH_SEPARATOR_STRING + child_subpath;
             }
             
             assert(Tag.global.exists(child_path));
@@ -1583,7 +1598,10 @@ public class ReparentTagCommand : PageCommand {
         }
     }
     
-    private void reattach_in_play_sources_at(string path) {
+    private void reattach_in_play_sources_at(string client_path) {
+        string? new_path = HierarchicalTagUtilities.get_root_path_form(client_path);
+        string path = (new_path != null) ? new_path : client_path;
+        
         assert(Tag.global.exists(path));
         
         Tag tag = Tag.for_path(path);
@@ -1597,32 +1615,46 @@ public class ReparentTagCommand : PageCommand {
         assert(dest_before_state == null);
         
         src_before_state = new Gee.ArrayList<SourceProxy>();
+        dest_before_state = new Gee.ArrayList<SourceProxy>();
 
         // capture the child structure of the from tag
         assert(in_play_child_structure == null);
         in_play_child_structure = get_child_structure_at(from_path);
-        
-        // capture the child structure of the parent of the to tag, if the to tag has a parent
-        Gee.List<string> parent_paths = HierarchicalTagUtilities.enumerate_parent_paths(to_path);
-        if (parent_paths.size > 0)
-            to_path_parent_path = parent_paths.get(parent_paths.size - 1);
-        
-        if (to_path_parent_path != null) {
-            assert(existing_dest_child_structure == null);
-            existing_dest_child_structure = get_child_structure_at(to_path_parent_path);
-        }
         
         // save the state of the from tag
         assert(Tag.global.exists(from_path));
         Tag from_tag = Tag.for_path(from_path);
         src_before_state.add(from_tag.get_proxy());
         
+        // capture the child structure of the parent of the to tag, if the to tag has a parent
+        Gee.List<string> parent_paths = HierarchicalTagUtilities.enumerate_parent_paths(to_path);
+        if (parent_paths.size > 0)
+            to_path_parent_path = parent_paths.get(parent_paths.size - 1);
+        if (to_path_parent_path != null) {
+            assert(existing_dest_child_structure == null);
+            existing_dest_child_structure = get_child_structure_at(to_path_parent_path);
+        }
+        
+        // if the to tag doesn't have a parent, then capture the structure of the to tag itself
+        if (to_path_parent_path == null) {
+            assert(existing_dest_child_structure == null);
+            assert(existing_dest_membership == null);
+            existing_dest_child_structure = get_child_structure_at(to_path);
+            existing_dest_membership = new Gee.HashSet<MediaSource>();
+            existing_dest_membership.add_all(Tag.for_path(to_path).get_sources());
+        }
+        
         // save the state of the to tag's parent
         if (to_path_parent_path != null) {
-            to_path_parent_path = HierarchicalTagUtilities.get_root_path_form(to_path_parent_path);
+            string? new_tpp = HierarchicalTagUtilities.get_root_path_form(to_path_parent_path);
+            to_path_parent_path = (new_tpp != null) ? new_tpp : to_path_parent_path;
             assert(Tag.global.exists(to_path_parent_path));
-            dest_before_state = new Gee.ArrayList<SourceProxy>();
             dest_before_state.add(Tag.for_path(to_path_parent_path).get_proxy());
+        }
+        
+        // if the to tag doesn't have a parent, save the state of the to tag itself
+        if (to_path_parent_path == null) {
+            dest_before_state.add(Tag.for_path(to_path).get_proxy());
         }
 
         // save the state of the children of the from tag in order from most basic to most derived
@@ -1637,29 +1669,72 @@ public class ReparentTagCommand : PageCommand {
             for (int i = to_children.size - 1; i >= 0; i--)
                 dest_before_state.add(to_children.get(i).get_proxy());
         }
-            
+        
+        // if the to tag doesn't have a parent, then save the state of the to tag's direct
+        // children, if any
+        if (to_path_parent_path == null) {
+            Gee.List<Tag> to_children = Tag.for_path(to_path).get_hierarchical_children();
+            for (int i = to_children.size - 1; i >= 0; i--)
+                dest_before_state.add(to_children.get(i).get_proxy());
+        }
     }
     
     private void restore_before_state() {
         assert(src_before_state != null);
+        assert(existing_dest_child_structure != null);
+        
+        // unwind the destination tree to its pre-merge state
+        if (to_path_parent_path != null) {
+            string? new_tpp = HierarchicalTagUtilities.get_root_path_form(to_path_parent_path);
+            to_path_parent_path = (new_tpp != null) ? new_tpp : to_path_parent_path;
+        }
+
+        string unwind_target = (to_path_parent_path != null) ? to_path_parent_path : to_path;
+        foreach (Tag t in Tag.for_path(unwind_target).get_hierarchical_children()) {
+            string child_subpath = t.get_path().replace(unwind_target, "");
+            if (child_subpath.has_prefix(Tag.PATH_SEPARATOR_STRING))
+                child_subpath = child_subpath.substring(1);
+
+            if (!existing_dest_child_structure.has_key(child_subpath)) {
+                Tag.global.destroy_marked(Tag.global.mark(t), true);
+            } else {
+                Gee.Set<MediaSource> starting_sources = new Gee.HashSet<MediaSource>();
+                starting_sources.add_all(t.get_sources());
+                foreach (MediaSource source in starting_sources)
+                    if (!(existing_dest_child_structure.get(child_subpath).contains(source)))
+                        t.detach(source);
+            }
+        }
         
         for (int i = 0; i < src_before_state.size; i++)
             src_before_state.get(i).get_source();
 
-        to_path_parent_path = HierarchicalTagUtilities.get_root_path_form(to_path_parent_path);
-
         for (int i = 0; i < dest_before_state.size; i++)
             dest_before_state.get(i).get_source();
 
-        if (to_path_parent_path != null && existing_dest_child_structure != null) {
-            assert(Tag.global.exists(to_path_parent_path));
-            Tag t = Tag.for_path(to_path_parent_path);
+        if (to_path_parent_path != null) {
+            string? new_path = HierarchicalTagUtilities.get_root_path_form(to_path_parent_path);
+            string path = (new_path != null) ? new_path : to_path_parent_path;  
+
+            assert(Tag.global.exists(path));
+            
+            Tag t = Tag.for_path(path);
 
             Gee.List<Tag> kids = t.get_hierarchical_children();
             foreach (Tag kidtag in kids)
                 kidtag.detach_many(kidtag.get_sources());
 
-            restore_child_attachments_at(to_path_parent_path, existing_dest_child_structure);
+            restore_child_attachments_at(path, existing_dest_child_structure);
+        } else {
+            assert(existing_dest_membership != null);
+            Tag.for_path(to_path).detach_many(Tag.for_path(to_path).get_sources());
+            Tag.for_path(to_path).attach_many(existing_dest_membership);
+            
+            Gee.List<Tag> kids = Tag.for_path(to_path).get_hierarchical_children();
+            foreach (Tag kidtag in kids)
+                kidtag.detach_many(kidtag.get_sources());
+            
+            restore_child_attachments_at(to_path, existing_dest_child_structure);
         }
     }
     
@@ -1711,13 +1786,14 @@ public class ReparentTagCommand : PageCommand {
         
         // see if this copy operation will detach any media items from the source tag's parents
         if (src_parent_detachments == null) {
-            src_parent_detachments = new Gee.HashMap<Tag, Gee.Set<MediaSource>>();
-            foreach (MediaSource source in from_tag.get_sources()) {           
+            src_parent_detachments = new Gee.HashMap<string, Gee.Set<MediaSource>>();
+            foreach (MediaSource source in from_tag.get_sources()) {
                 Tag? current_parent = from_tag.get_hierarchical_parent();
                 int running_attach_count = from_tag.get_attachment_count(source) + 1;
                 while (current_parent != null) {
-                    if (!src_parent_detachments.has_key(current_parent))
-                        src_parent_detachments.set(current_parent, new Gee.HashSet<MediaSource>());
+                    string current_parent_path = current_parent.get_path();
+                    if (!src_parent_detachments.has_key(current_parent_path))
+                        src_parent_detachments.set(current_parent_path, new Gee.HashSet<MediaSource>());
 
                     int curr_parent_attach_count = current_parent.get_attachment_count(source);
                     
@@ -1726,7 +1802,7 @@ public class ReparentTagCommand : PageCommand {
                     // if this parent tag has no other child tags that the current media item is
                     // attached to
                     if (curr_parent_attach_count == running_attach_count)
-                        src_parent_detachments.get(current_parent).add(source);
+                        src_parent_detachments.get(current_parent_path).add(source);
 
                     running_attach_count++;
                     current_parent = current_parent.get_hierarchical_parent();
@@ -1735,33 +1811,33 @@ public class ReparentTagCommand : PageCommand {
         }
         
         // perform collected detachments
-        foreach (Tag p in src_parent_detachments.keys)
+        foreach (string p in src_parent_detachments.keys)
             foreach (MediaSource s in src_parent_detachments.get(p))
-                p.detach(s);
+                Tag.for_path(p).detach(s);
     }
     
     private void do_source_parent_reattachments() {
         assert(src_parent_detachments != null);
         
-        foreach (Tag p in src_parent_detachments.keys)
+        foreach (string p in src_parent_detachments.keys)
             foreach (MediaSource s in src_parent_detachments.get(p))
-                p.attach(s);
+                Tag.for_path(p).attach(s);
     }
     
     private void do_destination_parent_detachments() {
         assert(dest_parent_attachments != null);
         
-        foreach (Tag p in dest_parent_attachments.keys)
+        foreach (string p in dest_parent_attachments.keys)
             foreach (MediaSource s in dest_parent_attachments.get(p))
-                p.detach(s);
+                Tag.for_path(p).detach(s);
     }
     
     private void do_destination_parent_reattachments() {
         assert(dest_parent_attachments != null);
         
-        foreach (Tag p in dest_parent_attachments.keys)
+        foreach (string p in dest_parent_attachments.keys)
             foreach (MediaSource s in dest_parent_attachments.get(p))
-                p.attach(s);
+                Tag.for_path(p).attach(s);
     }
     
     private void copy_subtree(string from, string to) {
@@ -1773,15 +1849,16 @@ public class ReparentTagCommand : PageCommand {
         
         // see if this copy operation will attach any new media items to the destination's parents,
         // if so, record them for later undo/redo
-        dest_parent_attachments = new Gee.HashMap<Tag, Gee.Set<MediaSource>>();
-        foreach (MediaSource source in from_tag.get_sources()) {            
+        dest_parent_attachments = new Gee.HashMap<string, Gee.Set<MediaSource>>();
+        foreach (MediaSource source in from_tag.get_sources()) {
             Tag? current_parent = to_tag.get_hierarchical_parent();
             while (current_parent != null) {
-                if (!dest_parent_attachments.has_key(current_parent))
-                    dest_parent_attachments.set(current_parent, new Gee.HashSet<MediaSource>());
+                string current_parent_path = current_parent.get_path();
+                if (!dest_parent_attachments.has_key(current_parent_path))
+                    dest_parent_attachments.set(current_parent_path, new Gee.HashSet<MediaSource>());
 
                 if (!current_parent.contains(source))
-                    dest_parent_attachments.get(current_parent).add(source);
+                    dest_parent_attachments.get(current_parent_path).add(source);
             
                 current_parent = current_parent.get_hierarchical_parent();
             }
@@ -1807,8 +1884,14 @@ public class ReparentTagCommand : PageCommand {
         }
     }
     
-    private void destroy_subtree(string victim_path) {
-        assert(Tag.global.exists(victim_path));
+    private void destroy_subtree(string client_path) {
+        string? victim_path = HierarchicalTagUtilities.get_root_path_form(client_path);
+        if (victim_path == null)
+            victim_path = client_path;
+        
+        if (!Tag.global.exists(victim_path))
+            return;
+            
         Tag victim = Tag.for_path(victim_path);
 
         // destroy the children of the victim in order from most derived to most basic
@@ -1853,9 +1936,10 @@ public class ReparentTagCommand : PageCommand {
         
         prepare_parent(from_path);
 
-        destroy_subtree(to_path);
-
         restore_before_state();
+        
+        if (!to_path_exists)
+            destroy_subtree(to_path);
         
         restore_child_attachments_at(from_path, in_play_child_structure);
         reattach_in_play_sources_at(from_path);

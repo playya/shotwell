@@ -25,6 +25,28 @@ public class AlienDatabaseImportJob : BatchImportJob {
         exposure_time = import_source.get_exposure_time();
     }
     
+    private HierarchicalTagIndex? build_exclusion_index(Gee.Collection<AlienDatabaseTag> src_tags) {
+        Gee.Set<string> detected_htags = new Gee.HashSet<string>();
+        
+        foreach (AlienDatabaseTag src_tag in src_tags) {
+            string? prepped = HierarchicalTagUtilities.join_path_components(
+                Tag.prep_tag_names(
+                    build_path_components(src_tag)
+                )
+            );
+            
+            if (prepped != null && prepped.has_prefix(Tag.PATH_SEPARATOR_STRING)) {
+                detected_htags.add(prepped);
+
+                Gee.List<string> parents = HierarchicalTagUtilities.enumerate_parent_paths(prepped);
+                foreach (string parent in parents)
+                    detected_htags.add(parent);
+            }
+        }
+        
+        return (detected_htags.size > 0) ? HierarchicalTagIndex.from_paths(detected_htags) : null;
+    }
+    
     public time_t get_exposure_time() {
         return exposure_time;
     }
@@ -63,6 +85,16 @@ public class AlienDatabaseImportJob : BatchImportJob {
         file_to_import = src_file;
         copy_to_library = false;
         
+        HierarchicalTagIndex? detected_htags =
+            build_exclusion_index(import_source.get_photo().get_tags());
+        
+        if (detected_htags != null) {
+            Gee.Collection<string> paths = detected_htags.get_all_paths();
+
+            foreach (string path in paths)
+                Tag.for_path(path);
+        }
+        
         return true;
     }
     
@@ -81,8 +113,26 @@ public class AlienDatabaseImportJob : BatchImportJob {
                     build_path_components(src_tag)
                 )
             );
-            if (prepped != null)
+            if (prepped != null) {
+                if (HierarchicalTagUtilities.enumerate_path_components(prepped).size == 1) {
+                    if (prepped.has_prefix(Tag.PATH_SEPARATOR_STRING))
+                        prepped = HierarchicalTagUtilities.hierarchical_to_flat(prepped);
+                } else {
+                    Gee.List<string> parents =
+                        HierarchicalTagUtilities.enumerate_parent_paths(prepped);
+
+                    assert(parents.size > 0);
+
+                    string top_level_parent = parents.get(0);
+                    string flat_top_level_parent =
+                        HierarchicalTagUtilities.hierarchical_to_flat(top_level_parent);
+                    
+                    if (Tag.global.exists(flat_top_level_parent))
+                        Tag.for_path(flat_top_level_parent).promote();
+                }
+
                 Tag.for_path(prepped).attach(photo);
+            }
         }
         // event
         AlienDatabaseEvent? src_event = src_photo.get_event();
@@ -108,7 +158,7 @@ public class AlienDatabaseImportJob : BatchImportJob {
         // use a linked list as we are always inserting in head position
         Gee.List<string> components = new Gee.LinkedList<string>();
         for (AlienDatabaseTag current_tag = tag; current_tag != null; current_tag = current_tag.get_parent()) {
-            components.insert(0, current_tag.get_name());
+            components.insert(0, HierarchicalTagUtilities.make_flat_tag_safe(current_tag.get_name()));
         }
         return components.to_array();
     }

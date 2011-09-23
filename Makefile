@@ -1,11 +1,13 @@
 PROGRAM = shotwell
 PROGRAM_THUMBNAILER = shotwell-video-thumbnailer
 
-VERSION = 0.11.0+trunk
+VERSION = 0.11.2+trunk
 GETTEXT_PACKAGE = $(PROGRAM)
 BUILD_ROOT = 1
 
+ifndef VALAC
 VALAC := valac
+endif
 VALAC_VERSION := `$(VALAC) --version | awk '{print $$2}'`
 MIN_VALAC_VERSION := 0.11.7
 MAX_VALAC_VERSION := 0.13.0
@@ -18,7 +20,6 @@ MIN_VALADATE_VERSION := 0.1.1
 
 # defaults that may be overridden by configure.mk
 PREFIX=/usr/local
-SCHEMA_FILE_DIR=/etc/gconf/schemas
 BUILD_RELEASE=1
 LIB=lib
 
@@ -136,7 +137,6 @@ RESOURCE_FILES = \
 SYS_INTEGRATION_FILES = \
 	shotwell.desktop.head \
 	shotwell-viewer.desktop.head \
-	shotwell.schemas \
 	org.yorba.shotwell.gschema.xml \
 	org.yorba.shotwell-extras.gschema.xml \
 	shotwell.convert
@@ -552,9 +552,13 @@ install:
 	mkdir -p $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas
 	$(INSTALL_DATA) misc/org.yorba.shotwell.gschema.xml $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas
 	$(INSTALL_DATA) misc/org.yorba.shotwell-extras.gschema.xml $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas
+ifndef DISABLE_SCHEMAS_COMPILE
 	glib-compile-schemas $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas
+endif
+ifndef DISABLE_GSETTINGS_CONVERT_INSTALL
 	mkdir -p $(DESTDIR)/usr/share/GConf/gsettings
 	$(INSTALL_DATA) misc/shotwell.convert $(DESTDIR)/usr/share/GConf/gsettings
+endif
 ifndef DISABLE_ICON_UPDATE
 	-gtk-update-icon-cache -t -f $(DESTDIR)$(PREFIX)/share/icons/hicolor || :
 endif
@@ -565,12 +569,6 @@ endif
 	$(INSTALL_DATA) misc/shotwell-viewer.desktop $(DESTDIR)$(PREFIX)/share/applications
 ifndef DISABLE_DESKTOP_UPDATE
 	-update-desktop-database || :
-endif
-ifndef DISABLE_SCHEMAS_INSTALL
-	GCONF_CONFIG_SOURCE=`gconftool-2 --get-default-source` gconftool-2 --makefile-install-rule misc/shotwell.schemas
-else
-	mkdir -p $(DESTDIR)$(SCHEMA_FILE_DIR)
-	$(INSTALL_DATA) misc/shotwell.schemas $(DESTDIR)$(SCHEMA_FILE_DIR)
 endif
 ifdef ENABLE_APPORT_HOOK_INSTALL
 	mkdir -p $(DESTDIR)$(PREFIX)/share/apport/package-hooks
@@ -624,11 +622,6 @@ endif
 ifndef DISABLE_HELP_INSTALL
 	rm -rf $(DESTDIR)$(PREFIX)/share/gnome/help/shotwell
 endif
-ifndef DISABLE_SCHEMAS_INSTALL
-	GCONF_CONFIG_SOURCE=`gconftool-2 --get-default-source` gconftool-2 --makefile-uninstall-rule misc/shotwell.schemas
-else
-	rm -f $(DESTDIR)$(SCHEMA_FILE_DIR)/shotwell.schemas
-endif
 ifdef ENABLE_APPORT_HOOK_INSTALL
 	rm -f $(DESTDIR)$(PREFIX)/share/apport/package-hooks/shotwell.py
 endif
@@ -643,8 +636,12 @@ ifdef INSTALL_HEADERS
 endif
 	rm -f $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas/org.yorba.shotwell.gschema.xml
 	rm -f $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas/org.yorba.shotwell-extras.gschema.xml
+ifndef DISABLE_SCHEMAS_COMPILE
 	glib-compile-schemas $(DESTDIR)$(PREFIX)/share/glib-2.0/schemas
+endif
+ifndef DISABLE_GSETTINGS_CONVERT_INSTALL
 	rm -f $(DESTDIR)/usr/share/GConf/gsettings/shotwell.convert
+endif
 
 $(PC_FILE): $(PC_INPUT) $(MAKE_FILES)
 	m4 '-D_VERSION_=$(VERSION)' '-D_PREFIX_=$(PREFIX)' '-D_REQUIREMENTS_=$(PLUGIN_PKG_REQS)' \
@@ -683,7 +680,7 @@ $(EXPANDED_OBJ_FILES): %.o: %.c $(CONFIG_IN) Makefile
 	$(CC) -c $(VALA_CFLAGS) `$(LIBRAW_CONFIG) --cflags` $(CFLAGS) -o $@ $<
 
 $(PROGRAM): $(EXPANDED_OBJ_FILES) $(RESOURCES) $(LANG_STAMP) $(THUMBNAILER_BIN)
-	$(CC) $(EXPANDED_OBJ_FILES) $(CFLAGS) $(RESOURCES) $(VALA_LDFLAGS) `$(LIBRAW_CONFIG) --libs` $(EXPORT_FLAGS) -o $@
+	$(CC) $(EXPANDED_OBJ_FILES) $(CFLAGS) $(LDFLAGS) $(RESOURCES) $(VALA_LDFLAGS) `$(LIBRAW_CONFIG) --libs` $(EXPORT_FLAGS) -o $@
 	glib-compile-schemas misc
 
 $(THUMBNAILER_BIN): $(EXPANDED_THUMBNAILER_SRC_FILES)
@@ -712,7 +709,7 @@ docs:
 glade: lib$(PROGRAM).so
 
 lib$(PROGRAM).so: $(EXPANDED_OBJ_FILES) $(RESOURCES) $(LANG_STAMP)
-	$(CC) $(EXPANDED_OBJ_FILES) $(CFLAGS) $(RESOURCES) $(VALA_LDFLAGS) `$(LIBRAW_CONFIG) --libs` $(EXPORT_FLAGS) -shared -o $@
+	$(CC) $(EXPANDED_OBJ_FILES) $(CFLAGS) $(LDFLAGS) $(RESOURCES) $(VALA_LDFLAGS) `$(LIBRAW_CONFIG) --libs` $(EXPORT_FLAGS) -shared -o $@
 
 .PHONY: pkgcheck
 pkgcheck:
