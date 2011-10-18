@@ -1,7 +1,8 @@
 PROGRAM = shotwell
 PROGRAM_THUMBNAILER = shotwell-video-thumbnailer
 
-VERSION = 0.11.2+trunk
+
+VERSION = 0.11.5+trunk
 GETTEXT_PACKAGE = $(PROGRAM)
 BUILD_ROOT = 1
 
@@ -9,8 +10,7 @@ ifndef VALAC
 VALAC := valac
 endif
 VALAC_VERSION := `$(VALAC) --version | awk '{print $$2}'`
-MIN_VALAC_VERSION := 0.11.7
-MAX_VALAC_VERSION := 0.13.0
+MIN_VALAC_VERSION := 0.14.0
 INSTALL_PROGRAM := install
 INSTALL_DATA := install -m 644
 
@@ -262,8 +262,8 @@ LOCAL_PKGS = \
 # added to this list
 EXT_PKGS = \
 	atk \
-	gdk-2.0 \
-	gdk-x11-2.0 \
+	gdk-3.0 \
+	gdk-x11-3.0 \
 	gee-1.0 \
 	gexiv2 \
 	gio-unix-2.0 \
@@ -272,22 +272,21 @@ EXT_PKGS = \
 	gstreamer-0.10 \
 	gstreamer-base-0.10 \
 	gstreamer-pbutils-0.10 \
-	gtk+-2.0 \
+	gtk+-3.0 \
 	gudev-1.0 \
 	libexif \
 	libgphoto2 \
 	libsoup-2.4 \
 	libxml-2.0 \
 	sqlite3 \
-	unique-1.0 \
-	webkit-1.0 \
-	gconf-2.0
+	unique-3.0 \
+	webkitgtk-3.0 
 ifdef UNITY_SUPPORT
 EXT_PKGS += unity
 endif
 
 THUMBNAILER_PKGS = \
-    gtk+-2.0 \
+    gtk+-3.0 \
     gee-1.0 \
     gstreamer-0.10 \
     gstreamer-base-0.10
@@ -307,17 +306,17 @@ EXT_PKG_VERSIONS = \
 	gmodule-2.0 >= 2.24.0 \
 	gstreamer-0.10 >= 0.10.28 \
 	gstreamer-base-0.10 >= 0.10.28 \
+	gstreamer-plugins-base-0.10 >= 0.10.32 \
 	gstreamer-pbutils-0.10 >= 0.10.32 \
-	gtk+-2.0 >= 2.18.0 \
+	gtk+-3.0 >= 3.0.11 \
 	gudev-1.0 >= 145 \
 	libexif >= 0.6.16 \
 	libgphoto2 >= 2.4.2 \
 	libsoup-2.4 >= 2.26.0 \
 	libxml-2.0 >= 2.6.32 \
 	sqlite3 >= 3.5.9 \
-	unique-1.0 >= 1.0.0 \
-	webkit-1.0 >= 1.1.5 \
-	gconf-2.0 >= 2.22.0
+	unique-3.0 >= 3.0.0 \
+	webkitgtk-3.0 >= 1.4.0 
 
 ifdef ENABLE_TESTS
 EXT_PKGS += valadate-1.0

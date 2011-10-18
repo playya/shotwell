@@ -30,7 +30,8 @@ public abstract class EditingToolWindow : Gtk.Window {
         add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.KEY_PRESS_MASK);
         focus_on_map = true;
         set_accept_focus(true);
-        set_flags(Gtk.WidgetFlags.CAN_FOCUS);
+        set_can_focus(true);
+        set_has_resize_grip(false);
     }
     
     public override void add(Gtk.Widget widget) {
@@ -454,6 +455,8 @@ public abstract class EditingTool {
     // a pixbuf with unsaved tool edits in it).  That can be handled in the paint() virtual method.
     public virtual Gdk.Pixbuf? get_display_pixbuf(Scaling scaling, Photo photo,
         out Dimensions max_dim) throws Error {
+        max_dim = Dimensions();
+        
         return null;
     }
     
@@ -831,9 +834,12 @@ public class CropTool : EditingTool {
         } else {
             set_normal_constraint_mode();
 
-            if (selected_constraint.aspect_ratio != ANY_ASPECT_RATIO) {
-                custom_init_width = selected_constraint.basis_width;
-                custom_init_height = selected_constraint.basis_height;
+            if (selected_constraint.aspect_ratio != ANY_ASPECT_RATIO) { 
+                // user may have switched away from 'Custom' without
+                // accepting, so set these to default back to saved
+                // values.
+                custom_init_width = Config.Facade.get_instance().get_last_crop_width();
+                custom_init_height = Config.Facade.get_instance().get_last_crop_height();
                 custom_aspect_ratio = ((float) custom_init_width) / ((float) custom_init_height);
             }
         }
@@ -843,7 +849,7 @@ public class CropTool : EditingTool {
         if (!get_selected_constraint().is_pivotable)
             reticle_orientation = ReticleOrientation.LANDSCAPE;
 
-        if (get_constraint_aspect_ratio() != pre_aspect_ratio) {
+        if (get_constraint_aspect_ratio() != pre_aspect_ratio) {                
             Box new_crop = constrain_crop(scaled_crop);
             
             crop_resized(new_crop);
@@ -1004,6 +1010,7 @@ public class CropTool : EditingTool {
         
         // set up the constraint combo box
         crop_tool_window.constraint_combo.set_model(constraint_list);
+        crop_tool_window.constraint_combo.set_active(Config.Facade.get_instance().get_last_crop_menu_choice());
 
         // set up the pivot reticle button
         update_pivot_button_state();
@@ -1029,13 +1036,43 @@ public class CropTool : EditingTool {
         scaled_crop = crop.get_scaled_similar(uncropped_dim, 
             Dimensions.for_rectangle(canvas.get_scaled_pixbuf_position()));
         
-        custom_init_width = scaled_crop.get_width();
-        custom_init_height = scaled_crop.get_height();
+        // get the custom width and height from the saved config and
+        // set up the initial custom values with it.
+        custom_width = Config.Facade.get_instance().get_last_crop_width();
+        custom_height = Config.Facade.get_instance().get_last_crop_height();
+        custom_init_width = custom_width;
+        custom_init_height = custom_height;
         pre_aspect_ratio = ((float) custom_init_width) / ((float) custom_init_height);
         
         constraint_mode = ConstraintMode.NORMAL;
 
         base.activate(canvas);
+        
+        // make sure the window has its regular size before going into 
+        // custom mode, which will resize it and needs to save the old
+        // size first.
+        crop_tool_window.show_all();
+        crop_tool_window.hide();
+
+        // was 'custom' the most-recently-chosen menu item?
+        if (constraints[Config.Facade.get_instance().get_last_crop_menu_choice()].aspect_ratio == 
+            CUSTOM_ASPECT_RATIO) {
+            // yes, switch to custom mode, make the entry fields appear.
+            set_custom_constraint_mode();
+        }
+        
+        // since we no longer just run with the default, but rather
+        // a saved value, we'll behave as if the saved constraint has
+        // just been changed to so that everything gets updated and 
+        // the canvas stays in sync.
+        Box new_crop = constrain_crop(scaled_crop);
+            
+        crop_resized(new_crop);
+        scaled_crop = new_crop;
+        canvas.invalidate_area(new_crop);
+        canvas.repaint();
+            
+        pre_aspect_ratio = get_constraint_aspect_ratio();           
     }
     
     private void bind_canvas_handlers(PhotoCanvas canvas) {
@@ -1129,8 +1166,11 @@ public class CropTool : EditingTool {
         out Dimensions max_dim) throws Error {
         // show the uncropped photo for editing, but return null if no crop so the current pixbuf
         // is used
-        if (!photo.has_crop())
+        if (!photo.has_crop()) {
+            max_dim = Dimensions();
+            
             return null;
+        }
         
         max_dim = photo.get_original_dimensions();
         
@@ -1212,10 +1252,8 @@ public class CropTool : EditingTool {
     
     public override void paint(Cairo.Context default_ctx) {
         // fill region behind the crop surface with neutral color
-        int w;
-        int h;
-
-        canvas.get_drawing_window().get_size(out w, out h);
+        int w = canvas.get_drawing_window().get_width();
+        int h = canvas.get_drawing_window().get_height();
 
         default_ctx.set_source_rgba(0.0, 0.0, 0.0, 1.0);
         default_ctx.rectangle(0, 0, w, h);
@@ -1239,6 +1277,14 @@ public class CropTool : EditingTool {
     }
     
     private void on_crop_ok() {
+        // user's clicked OK, save the combobox choice and width/height.
+        // safe to do, even if not in 'custom' mode - the previous values
+        // will just get saved again.
+        Config.Facade.get_instance().set_last_crop_menu_choice(
+            crop_tool_window.constraint_combo.get_active());
+        Config.Facade.get_instance().set_last_crop_width(custom_width);
+        Config.Facade.get_instance().set_last_crop_height(custom_height);
+        
         // scale screen-coordinate crop to photo's coordinate system
         Box crop = scaled_crop.get_scaled_similar(
             Dimensions.for_rectangle(canvas.get_scaled_pixbuf_position()), 
@@ -2191,11 +2237,9 @@ public class FacesTool : EditingTool {
     
     public override void paint(Cairo.Context default_ctx) {
         // fill region behind the image surface with neutral color
-        int w;
-        int h;
-
-        canvas.get_drawing_window().get_size(out w, out h);
-
+        int w = canvas.get_drawing_window().get_width();
+        int h = canvas.get_drawing_window().get_height();
+        
         default_ctx.set_source_rgba(0.0, 0.0, 0.0, 1.0);
         default_ctx.rectangle(0, 0, w, h);
         default_ctx.fill();
@@ -2706,8 +2750,9 @@ public class RedeyeTool : EditingTool {
 }
 
 public class AdjustTool : EditingTool {
-    const int SLIDER_WIDTH = 160;
-
+    private const int SLIDER_WIDTH = 160;
+    private const uint SLIDER_DELAY_MSEC = 100;
+    
     private class AdjustToolWindow : EditingToolWindow {
         public Gtk.HScale exposure_slider = new Gtk.HScale.with_range(
             ExposureTransformation.MIN_PARAMETER, ExposureTransformation.MAX_PARAMETER,
@@ -2741,7 +2786,6 @@ public class AdjustTool : EditingTool {
             slider_organizer.attach_defaults(exposure_slider, 1, 2, 0, 1);
             exposure_slider.set_size_request(SLIDER_WIDTH, -1);
             exposure_slider.set_draw_value(false);
-            exposure_slider.set_update_policy(Gtk.UpdateType.DELAYED);
 
             Gtk.Label saturation_label = new Gtk.Label.with_mnemonic(_("Saturation:"));
             saturation_label.set_alignment(0.0f, 0.5f);
@@ -2749,7 +2793,6 @@ public class AdjustTool : EditingTool {
             slider_organizer.attach_defaults(saturation_slider, 1, 2, 1, 2);
             saturation_slider.set_size_request(SLIDER_WIDTH, -1);
             saturation_slider.set_draw_value(false);
-            saturation_slider.set_update_policy(Gtk.UpdateType.DELAYED);
 
             Gtk.Label tint_label = new Gtk.Label.with_mnemonic(_("Tint:"));
             tint_label.set_alignment(0.0f, 0.5f);
@@ -2757,7 +2800,6 @@ public class AdjustTool : EditingTool {
             slider_organizer.attach_defaults(tint_slider, 1, 2, 2, 3);
             tint_slider.set_size_request(SLIDER_WIDTH, -1);
             tint_slider.set_draw_value(false);
-            tint_slider.set_update_policy(Gtk.UpdateType.DELAYED);
 
             Gtk.Label temperature_label =
                 new Gtk.Label.with_mnemonic(_("Temperature:"));
@@ -2766,7 +2808,6 @@ public class AdjustTool : EditingTool {
             slider_organizer.attach_defaults(temperature_slider, 1, 2, 3, 4);
             temperature_slider.set_size_request(SLIDER_WIDTH, -1);
             temperature_slider.set_draw_value(false);
-            temperature_slider.set_update_policy(Gtk.UpdateType.DELAYED);
 
             Gtk.Label shadows_label = new Gtk.Label.with_mnemonic(_("Shadows:"));
             shadows_label.set_alignment(0.0f, 0.5f);
@@ -2774,7 +2815,6 @@ public class AdjustTool : EditingTool {
             slider_organizer.attach_defaults(shadows_slider, 1, 2, 4, 5);
             shadows_slider.set_size_request(SLIDER_WIDTH, -1);
             shadows_slider.set_draw_value(false);
-            shadows_slider.set_update_policy(Gtk.UpdateType.DELAYED);
 
             Gtk.HBox button_layouter = new Gtk.HBox(false, 8);
             button_layouter.set_homogeneous(true);
@@ -2970,6 +3010,11 @@ public class AdjustTool : EditingTool {
     private PixelTransformationBundle transformations = null;
     private float[] fp_pixel_cache = null;
     private bool disable_histogram_refresh = false;
+    private OneShotScheduler? temperature_scheduler = null;
+    private OneShotScheduler? tint_scheduler = null;
+    private OneShotScheduler? saturation_scheduler = null;
+    private OneShotScheduler? exposure_scheduler = null;
+    private OneShotScheduler? shadows_scheduler = null;
     
     private AdjustTool() {
     }
@@ -3101,8 +3146,11 @@ public class AdjustTool : EditingTool {
 
     public override Gdk.Pixbuf? get_display_pixbuf(Scaling scaling, Photo photo, 
         out Dimensions max_dim) throws Error {
-        if (!photo.has_color_adjustments())
+        if (!photo.has_color_adjustments()) {
+            max_dim = Dimensions();
+            
             return null;
+        }
         
         max_dim = photo.get_dimensions();
         
@@ -3149,30 +3197,65 @@ public class AdjustTool : EditingTool {
     }
     
     private void on_temperature_adjustment() {
+        if (temperature_scheduler == null)
+            temperature_scheduler = new OneShotScheduler("temperature", on_delayed_temperature_adjustment);
+        
+        temperature_scheduler.after_timeout(SLIDER_DELAY_MSEC, true);
+    }
+    
+    private void on_delayed_temperature_adjustment() {
         TemperatureTransformation new_temp_trans = new TemperatureTransformation(
             (float) adjust_tool_window.temperature_slider.get_value());
         slider_updated(new_temp_trans, _("Temperature"));
     }
-
+    
     private void on_tint_adjustment() {
+        if (tint_scheduler == null)
+            tint_scheduler = new OneShotScheduler("tint", on_delayed_tint_adjustment);
+        
+        tint_scheduler.after_timeout(SLIDER_DELAY_MSEC, true);
+    }
+    
+    private void on_delayed_tint_adjustment() {
         TintTransformation new_tint_trans = new TintTransformation(
             (float) adjust_tool_window.tint_slider.get_value());
         slider_updated(new_tint_trans, _("Tint"));
     }
-
+    
     private void on_saturation_adjustment() {
+        if (saturation_scheduler == null)
+            saturation_scheduler = new OneShotScheduler("saturation", on_delayed_saturation_adjustment);
+        
+        saturation_scheduler.after_timeout(SLIDER_DELAY_MSEC, true);
+    }
+    
+    private void on_delayed_saturation_adjustment() {
         SaturationTransformation new_sat_trans = new SaturationTransformation(
             (float) adjust_tool_window.saturation_slider.get_value());
         slider_updated(new_sat_trans, _("Saturation"));
     }
-
+    
     private void on_exposure_adjustment() {
+        if (exposure_scheduler == null)
+            exposure_scheduler = new OneShotScheduler("exposure", on_delayed_exposure_adjustment);
+        
+        exposure_scheduler.after_timeout(SLIDER_DELAY_MSEC, true);
+    }
+    
+    private void on_delayed_exposure_adjustment() {
         ExposureTransformation new_exp_trans = new ExposureTransformation(
             (float) adjust_tool_window.exposure_slider.get_value());
         slider_updated(new_exp_trans, _("Exposure"));
     }
     
     private void on_shadows_adjustment() {
+        if (shadows_scheduler == null)
+            shadows_scheduler = new OneShotScheduler("shadows", on_delayed_shadows_adjustment);
+        
+        shadows_scheduler.after_timeout(SLIDER_DELAY_MSEC, true);
+    }
+    
+    private void on_delayed_shadows_adjustment() {
         ShadowDetailTransformation new_shadows_trans = new ShadowDetailTransformation(
             (float) adjust_tool_window.shadows_slider.get_value());
         slider_updated(new_shadows_trans, _("Shadows"));

@@ -125,7 +125,7 @@ public class TransitionClock {
     private OpTimer paint_timer;
     private Spit.Transitions.Visuals? visuals = null;
     private Spit.Transitions.Motion? motion = null;
-    private RepaintCallback? repaint = null;
+    private unowned RepaintCallback? repaint = null;
     private uint timer_id = 0;
     private ulong time_started = 0;
     private int frame_number = 0;
@@ -220,14 +220,6 @@ public class TransitionClock {
         repaint();
     }
     
-    // This is a convenience method for paint().
-    public bool paint_drawable(Gdk.Drawable drawable) {
-        int width, height;
-        drawable.get_size(out width, out height);
-        
-        return paint(Gdk.cairo_create(drawable), width, height);
-    }
-    
     // Call this whenever using a TransitionClock in the expose event.  Returns false if the
     // transition has completed, in which case the caller should paint the final result.
     public bool paint(Cairo.Context ctx, int width, int height) {
@@ -292,7 +284,7 @@ public class NullTransitionDescriptor : Object, Spit.Pluggable, Spit.Transitions
         return _("None");
     }
     
-    public void get_info(out Spit.PluggableInfo info) {
+    public void get_info(ref Spit.PluggableInfo info) {
     }
     
     public void activation(bool enabled) {

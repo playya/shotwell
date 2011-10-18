@@ -1,3 +1,29 @@
+Shotwell 0.11.5 - 18 October 2011 - "I hate anyone that ever had a pony"
+---------------------------------------------------------------------
+
+  * Fixes a collection concurrent access issue that could cause
+    Shotwell to crash during F-Spot import for users still
+    affected by this issue even after installing Shotwell 0.11.4.
+
+
+Shotwell 0.11.4 - 13 October 2011 - "The Pony Remark"
+---------------------------------------------------------------------
+
+  * Fixes two collection concurrent access issues that could cause
+    Shotwell to crash during F-Spot import.
+
+
+Shotwell 0.11.3 - 11 October 2011 - "All Old People Steal"
+---------------------------------------------------------------------
+
+  * Fixes a critical issue where Shotwell could crash immediately
+    following a photo import
+  * Fixes a critical issue where Shotwell could crash if the user
+    entered a tag name containing a slash ("/") character
+  * Long error messages in the Publishing dialog box are now wrapped
+    correctly
+
+
 Shotwell 0.11.2 - 20 September 2011 - "Strap them to a Rickshaw"
 ---------------------------------------------------------------------
 

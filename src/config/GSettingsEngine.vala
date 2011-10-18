@@ -15,6 +15,7 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
     private const string VIDEO_SCHEMA_NAME = ROOT_SCHEMA_NAME + ".video";
     private const string PRINTING_SCHEMA_NAME = ROOT_SCHEMA_NAME + ".printing";
     private const string SHARING_SCHEMA_NAME = ROOT_SCHEMA_NAME + ".sharing";
+    private const string CROP_SCHEMA_NAME = ROOT_SCHEMA_NAME + ".crop-settings";
     private const string SYSTEM_DESKTOP_SCHEMA_NAME = "org.gnome.desktop.background";
     private const string PLUGINS_ENABLE_DISABLE_SCHEMA_NAME = ROOT_SCHEMA_NAME +
         ".plugins.enable-state";
@@ -54,6 +55,9 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
         schema_names[ConfigurableProperty.HIDE_PHOTOS_ALREADY_IMPORTED] = UI_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.IMPORT_DIR] = FILES_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.KEEP_RELATIVITY] = UI_PREFS_SCHEMA_NAME;
+        schema_names[ConfigurableProperty.LAST_CROP_HEIGHT] = CROP_SCHEMA_NAME;
+        schema_names[ConfigurableProperty.LAST_CROP_MENU_CHOICE] = CROP_SCHEMA_NAME;
+        schema_names[ConfigurableProperty.LAST_CROP_WIDTH] = CROP_SCHEMA_NAME;
         schema_names[ConfigurableProperty.LAST_USED_SERVICE] = SHARING_SCHEMA_NAME;
         schema_names[ConfigurableProperty.LIBRARY_PHOTOS_SORT_ASCENDING] = UI_PREFS_SCHEMA_NAME;
         schema_names[ConfigurableProperty.LIBRARY_PHOTOS_SORT_BY] = UI_PREFS_SCHEMA_NAME;
@@ -107,6 +111,9 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
         key_names[ConfigurableProperty.HIDE_PHOTOS_ALREADY_IMPORTED] = "hide-photos-already-imported";
         key_names[ConfigurableProperty.IMPORT_DIR] = "import-dir";
         key_names[ConfigurableProperty.KEEP_RELATIVITY] = "keep-relativity";
+        key_names[ConfigurableProperty.LAST_CROP_HEIGHT] = "last-crop-height";
+        key_names[ConfigurableProperty.LAST_CROP_MENU_CHOICE] = "last-crop-menu-choice";
+        key_names[ConfigurableProperty.LAST_CROP_WIDTH] = "last-crop-width";
         key_names[ConfigurableProperty.LAST_USED_SERVICE] = "last-used-service";
         key_names[ConfigurableProperty.LIBRARY_PHOTOS_SORT_ASCENDING] = "library-photos-sort-ascending";
         key_names[ConfigurableProperty.LIBRARY_PHOTOS_SORT_BY] = "library-photos-sort-by";
@@ -415,4 +422,46 @@ public class GSettingsConfigurationEngine : ConfigurationEngine, GLib.Object {
             critical("GSettingsConfigurationEngine: error: %s", err.message);
         }
     }
+    
+    // This method will convert Shotwell's GConf settings to gsettings by executing an external
+    // application.  This can be executed any number of times without causing problems.  It first
+    // checks if the Shotwell settings have been converted, and if not, runs the program.
+    public static void run_gsettings_data_converter() {
+        try {
+            KeyFile keyfile = new KeyFile();
+            keyfile.load_from_data_dirs("gsettings-data-convert", null, KeyFileFlags.NONE);
+            
+            // search to see if Shotwell's GConf settings have already been converted
+            string[]? list = keyfile.get_string_list("State", "converted");
+            if (list != null) {
+                foreach (string name in list) {
+                    // shotwell.convert is the key file stored in the build misc directory
+                    if (name == "shotwell.convert")
+                        return;
+                }
+            }
+        } catch (Error err) {
+            message("Error loading or parsing gsettings convert keyfile: %s", err.message);
+        }
+        
+        debug("Converting GConf settings to gsettings...");
+        
+        // Conversion hasn't occurred, do it now
+        // (Note that running this program multiple times is not a problem, so if the above
+        // logic fails, no worries.  See http://developer.gnome.org/gio/2.28/ch28s07.html)
+        try {
+            string so, se;
+            int ec;
+            Process.spawn_command_line_sync("gsettings-data-convert", out so, out se, out ec);
+            if (ec != 0) {
+                message("Error %d running gsettings-data-convert: stdout=\"%s\" stderr=\"%s\"",
+                    ec, so, se);
+            }
+            
+            debug("GConf to gsettings conversion completed");
+        } catch (Error err) {
+            message("Error running gsettings-data-convert: %s", err.message);
+        }
+    }
+    
 }

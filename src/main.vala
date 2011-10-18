@@ -40,9 +40,9 @@ void library_exec(string[] mounts) {
     shotwell.add_command("MOUNTED_CAMERA", (int) ShotwellCommand.MOUNTED_CAMERA);
     shotwell.message_received.connect(on_shotwell_message);
 
-    was_already_running = shotwell.is_running;
+    was_already_running = shotwell.is_running();
     
-    if (shotwell.is_running) {
+    if (was_already_running) {
         // send attached cameras & activate the window
         foreach (string mount in mounts) {
             Unique.MessageData data = new Unique.MessageData();
@@ -371,7 +371,7 @@ void main(string[] args) {
     
     // Run the gsettings-data-convert tool to migrate GConf settings to gsettings ... note that this
     // is designed to run every execution.  See http://developer.gnome.org/gio/2.28/ch28s07.html
-    GConfConfigurationEngine.run_gsettings_data_converter();
+    GSettingsConfigurationEngine.run_gsettings_data_converter();
     
     // init GTK (valac has already called g_threads_init())
     try {

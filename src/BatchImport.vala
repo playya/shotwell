@@ -153,6 +153,7 @@ public abstract class BatchImportJob {
     // filesize should only be returned if BatchImportJob represents a single file.
     public abstract bool determine_file_size(out uint64 filesize, out File file_or_dir);
     
+    // NOTE: prepare( ) is called from a background thread in the worker pool
     public abstract bool prepare(out File file_to_import, out bool copy_to_library) throws Error;
     
     // Completes the import for the new library photo once it's been imported.
@@ -161,6 +162,8 @@ public abstract class BatchImportJob {
     // that have been successfully imported.
     //
     // Returns true if any action was taken, false otherwise.
+    //
+    // NOTE: complete( )is called from the foreground thread
     public virtual bool complete(MediaSource source, BatchImportRoll import_roll) throws Error {
         return false;
     }
@@ -207,6 +210,7 @@ public class FileImportJob : BatchImportJob {
     }
     
     public override bool determine_file_size(out uint64 filesize, out File file) {
+        filesize = 0;
         file = file_or_dir;
         
         return false;
@@ -373,7 +377,7 @@ public class BatchImport : Object {
     private string name;
     private uint64 completed_bytes = 0;
     private uint64 total_bytes = 0;
-    private ImportReporter reporter;
+    private unowned ImportReporter reporter;
     private ImportManifest manifest;
     private bool scheduled = false;
     private bool completed = false;
@@ -1517,7 +1521,7 @@ private class PrepareFilesJob : BackgroundImportJob {
     public int prepared_files = 0;
     
     private Gee.List<FileToPrepare> files_to_prepare;
-    private NotificationCallback notification;
+    private unowned NotificationCallback notification;
     private File library_dir;
     
     // these are for debugging and testing only
@@ -1633,6 +1637,8 @@ private class PrepareFilesJob : BackgroundImportJob {
     
     private ImportResult prepare_file(BatchImportJob job, File file, File? associated_file, 
         bool copy_to_library, out PreparedFile prepared_file) {
+        prepared_file = null;
+        
         bool is_video = VideoReader.is_supported_video_file(file);
         
         if ((!is_video) && (!Photo.is_file_image(file)))

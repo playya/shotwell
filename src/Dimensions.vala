@@ -55,6 +55,13 @@ public struct Dimensions {
         return Dimensions(allocation.width, allocation.height);
     }
     
+    public static Dimensions for_widget_allocation(Gtk.Widget widget) {
+        Gtk.Allocation allocation;
+        widget.get_allocation(out allocation);
+        
+        return Dimensions(allocation.width, allocation.height);
+    }
+    
     public static Dimensions for_rectangle(Gdk.Rectangle rect) {
         return Dimensions(rect.width, rect.height);
     }
@@ -274,7 +281,7 @@ public struct Scaling {
     }
     
     public static Scaling for_widget(Gtk.Widget widget, bool scale_up) {
-        Dimensions viewport = Dimensions.for_allocation(widget.allocation);
+        Dimensions viewport = Dimensions.for_widget_allocation(widget);
         assert(viewport.has_area());
         
         return Scaling(ScaleConstraint.DIMENSIONS, NO_SCALE, viewport, scale_up);
@@ -309,6 +316,8 @@ public struct Scaling {
     }
     
     public bool is_best_fit(Dimensions original, out int pixels) {
+        pixels = 0;
+        
         if (scale == NO_SCALE)
             return false;
         
@@ -326,6 +335,8 @@ public struct Scaling {
     }
     
     public bool is_best_fit_dimensions(Dimensions original, out Dimensions scaled) {
+        scaled = Dimensions();
+        
         if (scale == NO_SCALE)
             return false;
         
@@ -345,6 +356,8 @@ public struct Scaling {
     }
     
     public bool is_for_viewport(Dimensions original, out Dimensions scaled) {
+        scaled = Dimensions();
+        
         if (scale != NO_SCALE)
             return false;
         
@@ -366,6 +379,8 @@ public struct Scaling {
     }
     
     public bool is_fill_viewport(Dimensions original, out Dimensions scaled) {
+        scaled = Dimensions();
+        
         if (constraint != ScaleConstraint.FILL_VIEWPORT)
             return false;
         
