@@ -263,8 +263,6 @@ LOCAL_PKGS = \
 	posix \
 	LConv
 
-# libraw is not listed (see note below); when libraw-config is no longer needed, it should be
-# added to this list
 EXT_PKGS = \
 	atk \
 	gdk-3.0 \
@@ -285,7 +283,8 @@ EXT_PKGS = \
 	libxml-2.0 \
 	sqlite3 \
 	unique-3.0 \
-	webkitgtk-3.0
+	webkitgtk-3.0 \
+	libraw
 ifdef UNITY_SUPPORT
 EXT_PKGS += unity
 endif
@@ -298,11 +297,6 @@ THUMBNAILER_PKGS = \
 
 DIRECT_LIBS =
 
-LIBRAW_PKG = \
-	libraw
-
-# libraw is handled separately (see note below); when libraw-config is no longer needed, the version
-# should be added to this list
 EXT_PKG_VERSIONS = \
 	gee-1.0 >= 0.5.0 \
 	gexiv2 >= 0.2.0 \
@@ -321,7 +315,8 @@ EXT_PKG_VERSIONS = \
 	libxml-2.0 >= 2.6.32 \
 	sqlite3 >= 3.5.9 \
 	unique-3.0 >= 3.0.0 \
-	webkitgtk-3.0 >= 1.4.0 
+	webkitgtk-3.0 >= 1.4.0 \
+	libraw >= 0.9.0
 
 ifdef ENABLE_TESTS
 EXT_PKGS += valadate-1.0
@@ -329,10 +324,7 @@ EXT_PKG_VERSIONS += valadate-1.0 >= 0.1.1
 endif
 DIRECT_LIBS_VERSIONS =
 
-LIBRAW_VERSION = \
-	0.9.0
-
-VALA_PKGS = $(EXT_PKGS) $(LOCAL_PKGS) $(LIBRAW_PKG)
+VALA_PKGS = $(EXT_PKGS) $(LOCAL_PKGS) 
 
 ifndef BUILD_DIR
 BUILD_DIR=src
@@ -389,7 +381,7 @@ PC_FILE := $(PC_INPUT:.m4=.pc)
 DIST_FILES = Makefile configure chkver $(EXPANDED_DIST_SRC_FILES) $(EXPANDED_VAPI_FILES) \
 	$(EXPANDED_SRC_HEADER_FILES) $(EXPANDED_RESOURCE_FILES) $(TEXT_FILES) $(EXPANDED_ICON_FILES) \
 	$(EXPANDED_SYS_INTEGRATION_FILES) $(EXPANDED_CORE_PO_FILES) $(EXPANDED_EXTRAS_PO_FILES) \
-	po/shotwell-core/shotwell.pot po/shotwell-extras/shotwell-extras.pot libraw-config \
+	po/shotwell-core/shotwell.pot po/shotwell-extras/shotwell-extras.pot \
 	$(EXPANDED_HELP_FILES) $(EXPANDED_HELP_IMAGES) apport/shotwell.py $(UNIT_RESOURCES) $(UNIT_MKS) \
 	unitize.mk units.mk $(PC_INPUT) $(PLUGINS_DIST_FILES) \
 	$(EXPANDED_THUMBNAILER_SRC_FILES)
@@ -433,10 +425,6 @@ PLUGIN_CFLAGS += $(REQUIRED_CFLAGS)
 
 # Required for gudev-1.0
 CFLAGS += -DG_UDEV_API_IS_SUBJECT_TO_CHANGE
-
-# Packaged libraw is not widely available, so we must fake what would be in its .pc file
-# if not available.
-LIBRAW_CONFIG=./libraw-config
 
 define check_valac_version
 	@ ./chkver min $(VALAC_VERSION) $(MIN_VALAC_VERSION) || ( echo 'Shotwell requires Vala compiler $(MIN_VALAC_VERSION) or greater.  You are running' $(VALAC_VERSION) '\b.'; exit 1 )
@@ -681,10 +669,10 @@ $(EXPANDED_C_FILES): $(VALA_STAMP)
 	@
 
 $(EXPANDED_OBJ_FILES): %.o: %.c $(CONFIG_IN) Makefile
-	$(CC) -c $(VALA_CFLAGS) `$(LIBRAW_CONFIG) --cflags` $(CFLAGS) -o $@ $<
+	$(CC) -c $(VALA_CFLAGS)  $(CFLAGS) -o $@ $<
 
 $(PROGRAM): $(EXPANDED_OBJ_FILES) $(RESOURCES) $(LANG_STAMP) $(THUMBNAILER_BIN)
-	$(CC) $(EXPANDED_OBJ_FILES) $(CFLAGS) $(LDFLAGS) $(RESOURCES) $(VALA_LDFLAGS) `$(LIBRAW_CONFIG) --libs` $(EXPORT_FLAGS) -o $@
+	$(CC) $(EXPANDED_OBJ_FILES) $(CFLAGS) $(LDFLAGS) $(RESOURCES) $(VALA_LDFLAGS) $(EXPORT_FLAGS) -o $@
 	glib-compile-schemas misc
 
 $(THUMBNAILER_BIN): $(EXPANDED_THUMBNAILER_SRC_FILES)
@@ -713,7 +701,7 @@ docs:
 glade: lib$(PROGRAM).so
 
 lib$(PROGRAM).so: $(EXPANDED_OBJ_FILES) $(RESOURCES) $(LANG_STAMP)
-	$(CC) $(EXPANDED_OBJ_FILES) $(CFLAGS) $(LDFLAGS) $(RESOURCES) $(VALA_LDFLAGS) `$(LIBRAW_CONFIG) --libs` $(EXPORT_FLAGS) -shared -o $@
+	$(CC) $(EXPANDED_OBJ_FILES) $(CFLAGS) $(LDFLAGS) $(RESOURCES) $(VALA_LDFLAGS) $(EXPORT_FLAGS) -shared -o $@
 
 .PHONY: pkgcheck
 pkgcheck:
@@ -724,7 +712,5 @@ endif
 ifdef EXT_PKGS
 	@pkg-config --print-errors --exists $(EXT_PKGS) $(DIRECT_LIBS_VERSIONS)
 endif
-# Check for libraw manually
-	@$(LIBRAW_CONFIG) --exists=$(LIBRAW_VERSION)
 endif
 	@ type msgfmt > /dev/null || ( echo 'msgfmt (usually found in the gettext package) is missing and is required to build Shotwell. ' ; exit 1 )
