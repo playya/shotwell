@@ -399,6 +399,10 @@ VALAFLAGS := $(VALAFLAGS) --vapi=libshotwell.vapi --define=ENABLE_TESTS
 DEFINES := $(DEFINES) ENABLE_TESTS=true
 endif
 
+ifdef ENABLE_FACES
+VALAFLAGS := $(VALAFLAGS) --define=ENABLE_FACES
+endif
+
 VALA_CFLAGS := `pkg-config --cflags $(EXT_PKGS) $(DIRECT_LIBS) gthread-2.0` \
 	$(foreach hdir,$(HEADER_DIRS),-I$(hdir)) \
 	$(foreach def,$(DEFINES),-D$(def))
