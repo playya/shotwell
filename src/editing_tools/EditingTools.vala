@@ -2025,7 +2025,7 @@ public class FacesTool : EditingTool {
         }
         
         public override bool key_press_event(Gdk.EventKey event) {
-            return key_pressed(event) || base.key_press_event(event);
+            return key_pressed(event) || entry.key_press_event(event) || base.key_press_event(event);
         }
     }
     
