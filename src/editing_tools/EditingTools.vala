@@ -1793,6 +1793,7 @@ public errordomain FaceShapeError {
 
 public class FacesTool : EditingTool {
     protected const int CONTROL_SPACING = 8;
+
     
     private enum EditingPhase {
         CLICK_TO_EDIT,
@@ -2013,14 +2014,34 @@ public class FacesTool : EditingTool {
         
         private Gtk.HBox layout = null;
 
+        private Gtk.EntryCompletion completion_entry;
+
         public EditingFaceToolWindow(Gtk.Window container) {
             base(container);
             
             entry = new Gtk.Entry();
-            
+
+            completion_entry = new Gtk.EntryCompletion();
+            var all_faces = Face.global.get_all();
+            var tree_model = new Gtk.ListStore(1, typeof(string));
+            Gtk.TreeIter iter = Gtk.TreeIter();
+
+            foreach(var data in all_faces) {
+                var face = data as Face;
+                tree_model.append(out iter);
+                tree_model.set(iter, 0, face.get_name());
+            }
+
+            completion_entry.set_model(tree_model);
+            completion_entry.set_minimum_key_length(0);
+            completion_entry.set_popup_completion(true);
+            completion_entry.set_text_column(0);
+
+            entry.set_completion(completion_entry);
+
             layout = new Gtk.HBox(false, CONTROL_SPACING);
             layout.add(entry);
-            
+
             add(layout);
         }
         
@@ -2030,7 +2051,7 @@ public class FacesTool : EditingTool {
     }
     
     private Cairo.Surface image_surface = null;
-    private Gee.HashMap<string, FaceShape> face_shapes;
+    private Gee.HashMap<string, FaceShape> face_shapes = null;
     private FaceShape editing_face_shape = null;
     private FacesToolWindow faces_tool_window = null;
     
@@ -2281,7 +2302,7 @@ public class FacesTool : EditingTool {
         if (editing_face_shape != null)
             editing_face_shape.show();
     }
-    
+   
     private void new_face_shape(int x, int y) {
         edit_face_shape(new FaceRectangle(canvas, x, y), true);
     }
@@ -2780,6 +2801,7 @@ public class RedeyeTool : EditingTool {
             on_close();
             return true;
         }
+
 
         return base.on_keypress(event);
     }
