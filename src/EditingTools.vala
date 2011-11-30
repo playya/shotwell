@@ -2015,6 +2015,7 @@ public class FacesTool : EditingTool {
             completion_entry.set_minimum_key_length(0);
             completion_entry.set_popup_completion(true);
             completion_entry.set_text_column(0);
+            completion_entry.set_match_func(face_completion_match);
 
             entry.set_completion(completion_entry);
 
@@ -2026,6 +2027,13 @@ public class FacesTool : EditingTool {
         
         public override bool key_press_event(Gdk.EventKey event) {
             return key_pressed(event) || entry.key_press_event(event) || base.key_press_event(event);
+        }
+
+        private bool face_completion_match(Gtk.EntryCompletion completion, string key, Gtk.TreeIter iter) {
+            string name = null;
+            var model = completion.get_model();
+            model.get(iter, 0, out name);
+            return name != null && key in name.down();
         }
     }
     
