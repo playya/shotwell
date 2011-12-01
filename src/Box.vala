@@ -4,17 +4,18 @@
  * See the COPYING file in this distribution. 
  */
 
+[Flags]
 public enum BoxLocation {
-    OUTSIDE,
-    INSIDE,
     TOP_SIDE,
     LEFT_SIDE,
     RIGHT_SIDE,
     BOTTOM_SIDE,
-    TOP_LEFT,
-    BOTTOM_LEFT,
-    TOP_RIGHT,
-    BOTTOM_RIGHT
+    TOP_LEFT = TOP_SIDE | LEFT_SIDE,
+    BOTTOM_LEFT = BOTTOM_SIDE | LEFT_SIDE,
+    TOP_RIGHT = TOP_SIDE | RIGHT_SIDE,
+    BOTTOM_RIGHT = BOTTOM_SIDE | RIGHT_SIDE,
+    OUTSIDE,
+    INSIDE
 }
 
 public enum BoxComplements {
