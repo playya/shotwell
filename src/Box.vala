@@ -15,7 +15,48 @@ public enum BoxLocation {
     TOP_RIGHT = TOP_SIDE | RIGHT_SIDE,
     BOTTOM_RIGHT = BOTTOM_SIDE | RIGHT_SIDE,
     OUTSIDE,
-    INSIDE
+    INSIDE,
+    VERTICAL_MASK = RIGHT_SIDE | LEFT_SIDE,
+    HORIZONTAL_MASK = BOTTOM_SIDE | TOP_SIDE;
+
+    public bool is_vertical() {
+        return (VERTICAL_MASK & this) != 0;
+    }
+
+    public bool is_horizontal() {
+        return (HORIZONTAL_MASK & this) != 0;
+    }
+
+    public BoxLocation flip_vertically() {
+        var ret = this;
+        if(is_vertical())
+           ret = (this ^ VERTICAL_MASK);
+        return ret;
+    }
+
+    public BoxLocation flip_horizontally() {
+        var ret = this;
+        if(is_horizontal())
+            ret = (this ^ HORIZONTAL_MASK);
+        return ret;
+    }
+
+    public BoxLocation get_vertical() {
+        return this & VERTICAL_MASK;
+    }
+
+    public BoxLocation get_horizontal() {
+        return this & HORIZONTAL_MASK;
+    }
+
+    public void flip() {
+        flip_vertically();
+        flip_horizontally();
+    }
+
+    public bool is_valid() {
+        return ! (VERTICAL_MASK in this) && ! (HORIZONTAL_MASK in this) && !(INSIDE in this && OUTSIDE in this);
+    }
 }
 
 public enum BoxComplements {
