@@ -537,6 +537,20 @@ public class FaceRectangle : FaceShape {
         width = right - left + 1;
         height = bottom - top + 1;
 
+        if (width < 0) {
+            in_manipulation = in_manipulation.flip_vertically();
+            int tmp = left;
+            left = right;
+            right = tmp;
+        }
+
+        if (height < 0) {
+            in_manipulation = in_manipulation.flip_horizontally();
+            int tmp = bottom;
+            bottom = top;
+            top = tmp;
+        }
+
         switch (in_manipulation) {
             case BoxLocation.LEFT_SIDE:
             case BoxLocation.TOP_LEFT:
