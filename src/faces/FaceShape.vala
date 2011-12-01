@@ -459,45 +459,8 @@ public class FaceRectangle : FaceShape {
         // get extra geometric information needed to enforce constraints
         int photo_right_edge = canvas.get_scaled_pixbuf().width - 1;
         int photo_bottom_edge = canvas.get_scaled_pixbuf().height - 1;
-        
-        switch (in_manipulation) {
-            case BoxLocation.LEFT_SIDE:
-                left = x;
-            break;
 
-            case BoxLocation.TOP_SIDE:
-                top = y;
-            break;
-
-            case BoxLocation.RIGHT_SIDE:
-                right = x;
-            break;
-
-            case BoxLocation.BOTTOM_SIDE:
-                bottom = y;
-            break;
-
-            case BoxLocation.TOP_LEFT:
-                top = y;
-                left = x;
-            break;
-
-            case BoxLocation.BOTTOM_LEFT:
-                bottom = y;
-                left = x;
-            break;
-
-            case BoxLocation.TOP_RIGHT:
-                top = y;
-                right = x;
-            break;
-
-            case BoxLocation.BOTTOM_RIGHT:
-                bottom = y;
-                right = x;
-            break;
-
-            case BoxLocation.INSIDE:
+        if(BoxLocation.INSIDE in in_manipulation) {
                 assert(last_grab_x >= 0);
                 assert(last_grab_y >= 0);
                 
@@ -543,13 +506,20 @@ public class FaceRectangle : FaceShape {
                         bottom = top + height - 1;
                     else top = bottom - height + 1;
                 }
-            break;
-            
-            default:
-                // do nothing, not even a repaint
-                return false;
+        } else if(BoxLocation.OUTSIDE in in_manipulation) {
+            // nothing to do
+            return false;
+        } else {
+            if(BoxLocation.LEFT_SIDE in in_manipulation)
+                 left = x;
+            else if(BoxLocation.RIGHT_SIDE in in_manipulation)
+                 right = x;
+            if(BoxLocation.BOTTOM_SIDE in in_manipulation)
+                 bottom = y;
+            else if(BoxLocation.TOP_SIDE in in_manipulation)
+                 top = y;
         }
-
+        
         // Check if the mouse has gone out of bounds, and if it has, make sure that the
         // face shape edges stay within the photo bounds.
         int width = right - left + 1;
