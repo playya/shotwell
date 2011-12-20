@@ -128,7 +128,7 @@ public class PhotoMetadata : MediaMetadata {
             unowned GExiv2.PreviewProperties?[] props = owner.exiv2.get_preview_properties();
             assert(props != null && props.length > number);
             
-            return owner.exiv2.get_preview_image(props[number]).get_data();
+            return (uint8[])owner.exiv2.get_preview_image(props[number]).get_data();
         }
     }
     
