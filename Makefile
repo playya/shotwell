@@ -108,7 +108,6 @@ THUMBNAILER_SRC_FILES = \
 	shotwell-video-thumbnailer.vala
 
 VAPI_FILES = \
-	gdk-3.0.vapi \
 	unique-3.0.vapi \
 	webkitgtk-3.0.vapi \
 	libexif.vapi \
